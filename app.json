@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Reminder Pro",
+    "slug": "reminder-pro",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "reminderpro",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourcompany.reminderpro",
+      "infoPlist": {
+        "NSUserNotificationUsageDescription": "Reminder Pro uses notifications to remind you about events you create."
+      }
+    },
+    "android": {
+      "package": "com.yourcompany.reminderpro",
+      "permissions": [
+        "NOTIFICATIONS",
+        "SCHEDULE_EXACT_ALARM",
+        "RECEIVE_BOOT_COMPLETED"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#0F766E",
+        "foregroundImage": "./assets/adaptive-icon.png"
+      }
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "reminders",
+          "enableBackgroundRemoteNotifications": false,
+          "sounds": ["./assets/sounds/reminder.wav"]
+        }
+      ],
+      "expo-document-picker",
+      "expo-file-system",
+      "expo-sharing"
+    ],
+    "extra": {
+      "privacy": "offline-first; no account, analytics, or backend configured",
+      "eas": { "projectId": "REPLACE_WITH_YOUR_EAS_PROJECT_ID" }
+    }
+  }
+}
