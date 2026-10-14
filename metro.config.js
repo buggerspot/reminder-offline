@@ -1,3 +1,3 @@
 const { getDefaultConfig } = require('expo/metro-config');
-const { withNativeWind } = require('nativewind/metro');
-module.exports = withNativeWind(getDefaultConfig(__dirname), { input: './global.css' });
+// Screens use native style objects. Avoid an unused CSS watcher in the native bundle.
+module.exports = getDefaultConfig(__dirname);

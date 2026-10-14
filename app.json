@@ -1,29 +1,34 @@
 {
   "expo": {
-    "name": "Reminder Pro",
+    "name": "Reminder Offline",
     "slug": "reminder-pro",
     "version": "1.0.0",
+    "icon": "./assets/images/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "scheme": "reminderpro",
+    "scheme": "reminderoffline",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.yourcompany.reminderpro",
+      "bundleIdentifier": "com.buggerspot.reminderoffline",
       "infoPlist": {
-        "NSUserNotificationUsageDescription": "Reminder Pro uses notifications to remind you about events you create."
+        "NSUserNotificationUsageDescription": "Offline Reminder uses notifications to remind you about events you create."
       }
     },
     "android": {
-      "package": "com.yourcompany.reminderpro",
+      "package": "com.buggerspot.reminderoffline",
       "permissions": [
-        "NOTIFICATIONS",
+        "POST_NOTIFICATIONS",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "WAKE_LOCK",
         "SCHEDULE_EXACT_ALARM",
         "RECEIVE_BOOT_COMPLETED"
       ],
-      "adaptiveIcon": {
-        "backgroundColor": "#0F766E",
-        "foregroundImage": "./assets/adaptive-icon.png"
-      }
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ]
     },
     "plugins": [
       [
@@ -31,16 +36,31 @@
         {
           "defaultChannel": "reminders",
           "enableBackgroundRemoteNotifications": false,
-          "sounds": ["./assets/sounds/reminder.wav"]
+          "sounds": [
+            "./assets/sounds/reminder.wav",
+            "./assets/sounds/gentle.wav",
+            "./assets/sounds/bright.wav"
+          ]
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#ffffff",
+          "image": "./assets/images/icon.png",
+          "imageWidth": 200
         }
       ],
       "expo-document-picker",
       "expo-file-system",
-      "expo-sharing"
+      "expo-sharing",
+      "./plugins/withReminderNative.cjs"
     ],
     "extra": {
       "privacy": "offline-first; no account, analytics, or backend configured",
-      "eas": { "projectId": "REPLACE_WITH_YOUR_EAS_PROJECT_ID" }
+      "eas": {
+        "projectId": "REPLACE_WITH_YOUR_EAS_PROJECT_ID"
+      }
     }
   }
 }

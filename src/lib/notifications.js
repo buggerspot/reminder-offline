@@ -1,10 +1,11 @@
-import { Platform } from 'react-native';
-import * as Notifications from 'expo-notifications';
+import { Platform, NativeModules } from "react-native";
+import * as Notifications from "expo-notifications";
+import { nextOccurrence } from "./recurrence";
 
-export const REMINDER_CATEGORY = 'REMINDER_ACTIONS';
-export const COMPLETE_ACTION = 'REMINDER_COMPLETE';
+export const REMINDER_CATEGORY = "REMINDER_ACTIONS";
+export const COMPLETE_ACTION = "REMINDER_COMPLETE";
 
-export async function configureNotifications(soundEnabled = true) {
+export function setForegroundNotificationSound(soundEnabled) {
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowBanner: true,
@@ -13,13 +14,17 @@ export async function configureNotifications(soundEnabled = true) {
       shouldSetBadge: false,
     }),
   });
+}
 
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('reminders', {
-      name: 'Reminders',
+export async function configureNotifications(soundEnabled = true) {
+  setForegroundNotificationSound(soundEnabled);
+
+  if (Platform.OS === "android") {
+    await Notifications.setNotificationChannelAsync("reminders", {
+      name: "Reminders",
       importance: Notifications.AndroidImportance.MAX,
       vibrationPattern: [0, 250, 150, 250],
-      sound: soundEnabled ? 'reminder.wav' : null,
+      sound: soundEnabled ? "reminder.wav" : null,
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       bypassDnd: false,
     });
@@ -28,12 +33,12 @@ export async function configureNotifications(soundEnabled = true) {
   await Notifications.setNotificationCategoryAsync(REMINDER_CATEGORY, [
     {
       identifier: COMPLETE_ACTION,
-      buttonTitle: 'Mark complete',
+      buttonTitle: "Mark complete",
       options: { opensAppToForeground: false, isDestructive: false },
     },
     {
-      identifier: 'REMINDER_OPEN',
-      buttonTitle: 'Open reminder',
+      identifier: "REMINDER_OPEN",
+      buttonTitle: "Open reminder",
       options: { opensAppToForeground: true },
     },
   ]);
@@ -47,17 +52,26 @@ export async function configureNotifications(soundEnabled = true) {
 }
 
 export async function scheduleReminder(reminder, soundEnabled = true) {
+  if (Platform.OS === "android") {
+    if (!NativeModules.ReminderNative)
+      throw new Error(
+        "Rebuild Offline Reminder for Android to enable the updated scheduler and sounds.",
+      );
+    return null;
+  }
   if (reminder.completed) return null;
-  const date = new Date(`${reminder.date}T${reminder.time}:00`);
+  const next = nextOccurrence(reminder);
+  if (!next) return null;
+  const date = new Date(`${next}T${reminder.time}:00`);
   if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) return null;
   const identifier = await Notifications.scheduleNotificationAsync({
     content: {
       title: reminder.title,
-      body: reminder.description || 'It is time for your reminder.',
+      body: reminder.description || "It is time for your reminder.",
       data: { reminderId: reminder.id },
       categoryIdentifier: REMINDER_CATEGORY,
-      sound: soundEnabled ? 'reminder.wav' : false,
-      ...(Platform.OS === 'android' ? { channelId: 'reminders' } : {}),
+      sound: soundEnabled ? "reminder.wav" : false,
+      ...(Platform.OS === "android" ? { channelId: "reminders" } : {}),
     },
     trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date },
   });
@@ -66,5 +80,9 @@ export async function scheduleReminder(reminder, soundEnabled = true) {
 
 export async function cancelReminderNotification(identifier) {
   if (!identifier) return;
-  try { await Notifications.cancelScheduledNotificationAsync(identifier); } catch (e) { /* already delivered or removed */ }
+  try {
+    await Notifications.cancelScheduledNotificationAsync(identifier);
+  } catch (e) {
+    /* already delivered or removed */
+  }
 }

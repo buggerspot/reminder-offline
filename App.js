@@ -1,13 +1,23 @@
-import "./global.css";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+  useDeferredValue,
+} from "react";
 import {
   Alert,
+  Appearance,
+  AppState,
+  FlatList,
+  Linking,
+  NativeModules,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
   ScrollView,
-  Switch,
   Text,
   TextInput,
   View,
@@ -32,6 +42,7 @@ import {
   Search,
   Settings as SettingsIcon,
   Sparkles,
+  Square,
   Sun,
   Trash2,
   Volume2,
@@ -41,6 +52,7 @@ import * as Notifications from "expo-notifications";
 import { StatusBar as ExpoStatusBar } from "expo-status-bar";
 import {
   configureNotifications,
+  setForegroundNotificationSound,
   scheduleReminder,
   cancelReminderNotification,
   COMPLETE_ACTION,
@@ -51,8 +63,35 @@ import {
   loadSettings,
   saveSettings,
 } from "./src/lib/storage";
-import { exportCSV, exportJSON, importReminders } from "./src/lib/exportImport";
-
+import { exportJSON, importReminders } from "./src/lib/exportImport";
+import {
+  occursOn,
+  nextOccurrence,
+  displayOccurrence,
+  isMissed,
+  validDate,
+  localDate,
+} from "./src/lib/recurrence";
+import { formatDate, formatTime } from "./src/lib/format";
+import {
+  BUILT_IN_SOUNDS,
+  loadSounds,
+  importSound,
+  removeSound,
+  previewSound,
+  stopPreview,
+} from "./src/lib/sounds";
+import {
+  PaletteContext,
+  Card,
+  Btn,
+  Label,
+  Field,
+  Chip,
+  ReminderRow,
+  SettingsToggle,
+  PermissionBanner,
+} from "./src/components";
 const C = {
   brand: "#0F766E",
   brand2: "#14B8A6",
@@ -64,10 +103,10 @@ const C = {
   mint: "#D1FAE5",
   orange: "#F59E0B",
   red: "#DC5757",
-  darkBg: "#0C1717",
-  darkCard: "#142424",
-  darkBorder: "#263B39",
-  white: "#F3FAF8",
+  darkBg: "#000000",
+  darkCard: "#141414",
+  darkBorder: "#303030",
+  white: "#F5F5F5",
 };
 const todayISO = () => {
   const d = new Date();
@@ -78,45 +117,20 @@ const timeNow = () => {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-const formatDate = (date) => {
-  if (!date) return "";
-  const d = new Date(`${date}T12:00:00`);
-  return d.toLocaleDateString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-};
-const formatTime = (time) => {
-  if (!time) return "";
-  const [h, m] = time.split(":").map(Number);
-  const d = new Date();
-  d.setHours(h, m, 0, 0);
-  return d.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-};
-const nextDate = (date, repeat) => {
-  const d = new Date(`${date}T12:00:00`);
-  if (repeat === "daily") d.setDate(d.getDate() + 1);
-  else if (repeat === "weekly") d.setDate(d.getDate() + 7);
-  else if (repeat === "monthly") d.setMonth(d.getMonth() + 1);
-  else if (repeat === "yearly") d.setFullYear(d.getFullYear() + 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
-
 export default function App() {
   const [reminders, setReminders] = useState([]);
   const [settings, setSettings] = useState({
     theme: "system",
     soundEnabled: true,
     keepReminderAfterDismiss: true,
-    confirmBeforeClear: true,
+    confirmBeforeClear: false,
     haptics: true,
     defaultRepeat: "none",
   });
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const dataReady = useRef(false);
   const [tab, setTab] = useState("Home");
   const [filter, setFilter] = useState("Upcoming");
   const [search, setSearch] = useState("");
@@ -131,6 +145,34 @@ export default function App() {
     repeat: "none",
     repeatUntil: "",
   });
+  const [selectedDate, setSelectedDate] = useState(todayISO());
+  const [calendarMonth, setCalendarMonth] = useState(new Date());
+  const [clock, setClock] = useState(Date.now());
+  const [permission, setPermission] = useState(true);
+  const [alarmStatus, setAlarmStatus] = useState(null);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [previewing, setPreviewing] = useState(null);
+  useEffect(() => {
+    if (!previewing) return;
+    const timer = setTimeout(() => {
+      stopPreview();
+      setPreviewing(null);
+    }, 15000);
+    return () => clearTimeout(timer);
+  }, [previewing]);
+  const [sounds, setSounds] = useState([]);
+  const soundRef = useRef(sounds);
+  soundRef.current = sounds;
+  const [showSounds, setShowSounds] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  const handledResponse = useRef(null);
+  const reminderRef = useRef(reminders);
+  reminderRef.current = reminders;
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const migratedNotifications = useRef(false);
+  const deferredSearch = useDeferredValue(search);
   const [busy, setBusy] = useState(false);
   const systemScheme = useColorScheme();
   const isDark =
@@ -143,10 +185,13 @@ export default function App() {
             bg: C.darkBg,
             card: C.darkCard,
             text: C.white,
-            muted: "#9CB2AE",
+            muted: "#A8A8A8",
             border: C.darkBorder,
-            soft: "#1C3331",
+            soft: "#202020",
             brand: "#2DD4BF",
+            onBrand: "#071A18",
+            danger: "#FCA5A5",
+            dangerSoft: "#2B1515",
           }
         : {
             bg: C.bg,
@@ -156,27 +201,157 @@ export default function App() {
             border: C.border,
             soft: "#EAF7F3",
             brand: C.brand,
+            onBrand: "#FFFFFF",
+            danger: "#B91C1C",
+            dangerSoft: "#FCE8E8",
           },
     [isDark],
   );
-
-  const refreshReminders = useCallback(async () => {
-    const r = await loadReminders();
-    setReminders(r);
-  }, []);
+  useEffect(() => {
+    Appearance.setColorScheme(
+      settings.theme === "system" ? "unspecified" : settings.theme,
+    );
+  }, [settings.theme]);
   useEffect(() => {
     (async () => {
+      dataReady.current = false;
       const [r, s] = await Promise.all([loadReminders(), loadSettings()]);
+      if (!Array.isArray(r))
+        throw new Error("Stored reminder data is invalid.");
       setReminders(r);
+      dataReady.current = true;
       setSettings(s);
-      await configureNotifications(s.soundEnabled);
+      setSounds(await loadSounds());
+      setPermission(await configureNotifications(s.soundEnabled));
       setLoaded(true);
     })().catch((e) => {
       console.warn(e);
+      if (!dataReady.current)
+        setLoadError(e.message || "Local storage is unavailable.");
       setLoaded(true);
     });
-  }, []);
-
+  }, [loadAttempt]);
+  useEffect(() => {
+    let refreshInProgress = false;
+    const refresh = async () => {
+      if (!loaded || !dataReady.current || refreshInProgress) return;
+      refreshInProgress = true;
+      try {
+        setClock(Date.now());
+        setPermission((await Notifications.getPermissionsAsync()).granted);
+        const completed =
+          await NativeModules.ReminderNative?.takeCompletions?.();
+        if (completed) {
+          const actions = JSON.parse(completed);
+          if (actions.length) {
+            const next = reminderRef.current.map((r) => {
+              const dates = actions
+                .filter((a) => a.id === r.id)
+                .map((a) => a.date);
+              return dates.length
+                ? r.repeat && r.repeat !== "none"
+                  ? {
+                      ...r,
+                      completedDates: [
+                        ...new Set([...(r.completedDates || []), ...dates]),
+                      ],
+                    }
+                  : {
+                      ...r,
+                      completed: true,
+                      completedAt: new Date().toISOString(),
+                    }
+                : r;
+            });
+            setReminders(next);
+            await saveReminders(next);
+            await NativeModules.ReminderNative.acknowledgeCompletions(
+              completed,
+            );
+          }
+        }
+        const openId = await NativeModules.ReminderNative?.takeOpenReminder?.();
+        if (openId) {
+          const item = reminderRef.current.find((r) => r.id === openId);
+          if (item) {
+            setDetail(displayOccurrence(item) || item);
+            setTab("Home");
+          }
+        }
+        const status = await NativeModules.ReminderNative?.status?.();
+        if (status) setAlarmStatus(status);
+        if (NativeModules.ReminderNative)
+          await NativeModules.ReminderNative.sync(
+            JSON.stringify(
+              reminderRef.current.map((r) => ({
+                ...r,
+                soundId: settingsRef.current.defaultSoundId || null,
+                soundUri:
+                  soundRef.current.find(
+                    (s) => s.id === settingsRef.current.defaultSoundId,
+                  )?.uri || null,
+              })),
+            ),
+            true,
+          );
+      } finally {
+        refreshInProgress = false;
+      }
+    };
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        setBannerDismissed(false);
+        refresh().catch(console.warn);
+      } else stopPreview();
+    });
+    const interval = setInterval(() => setClock(Date.now()), 30000);
+    const focus =
+      Platform.OS === "android"
+        ? AppState.addEventListener("focus", () =>
+            refresh().catch(console.warn),
+          )
+        : null;
+    refresh().catch(console.warn);
+    return () => {
+      subscription.remove();
+      focus?.remove();
+      clearInterval(interval);
+      stopPreview();
+    };
+  }, [loaded]);
+  useEffect(() => {
+    if (!loaded || !dataReady.current) return;
+    let active = true;
+    const reconcile = async () => {
+      if (Platform.OS === "android" && !NativeModules.ReminderNative) return;
+      if (!migratedNotifications.current) {
+        const scheduled =
+          await Notifications.getAllScheduledNotificationsAsync();
+        for (const request of scheduled) {
+          if (request.content.data?.reminderId && Platform.OS === "android")
+            await cancelReminderNotification(request.identifier);
+        }
+        migratedNotifications.current = true;
+      }
+      if (active && NativeModules.ReminderNative)
+        await NativeModules.ReminderNative.sync(
+          JSON.stringify(
+            reminders.map((r) => ({
+              ...r,
+              soundId: settings.defaultSoundId || null,
+              soundUri:
+                sounds.find((s) => s.id === settings.defaultSoundId)?.uri ||
+                null,
+            })),
+          ),
+          true,
+        );
+    };
+    reconcile().catch((e) => Alert.alert("Notification setup", e.message));
+    return () => {
+      active = false;
+    };
+  }, [loaded, reminders, settings.defaultSoundId, sounds]);
   const markComplete = useCallback(
     async (id) => {
       const current = reminders.find((x) => x.id === id);
@@ -184,52 +359,54 @@ export default function App() {
         setDetail(null);
         return;
       }
-      await cancelReminderNotification(current.notificationId);
       let updated;
       if (current.repeat && current.repeat !== "none") {
-        const followingDate = nextDate(current.date, current.repeat);
-        if (!current.repeatUntil || followingDate <= current.repeatUntil) {
-          const occurrence = {
-            ...current,
-            id: makeId(),
-            date: followingDate,
-            completed: false,
-            notificationId: null,
-            createdAt: new Date().toISOString(),
-          };
-          occurrence.notificationId = await scheduleReminder(
-            occurrence,
+        const occurrenceDate = detail?.id === id ? detail.date : todayISO();
+        updated = reminders.map((r) =>
+          r.id === id
+            ? {
+                ...r,
+                completedDates: [
+                  ...new Set([...(r.completedDates || []), occurrenceDate]),
+                ],
+              }
+            : r,
+        );
+        if (Platform.OS !== "android") {
+          await cancelReminderNotification(current.notificationId);
+          const series = updated.find((r) => r.id === id);
+          series.notificationId = await scheduleReminder(
+            series,
             settings.soundEnabled,
           );
-          updated = [
-            ...reminders.map((x) =>
-              x.id === id
-                ? {
-                    ...x,
-                    completed: true,
-                    completedAt: new Date().toISOString(),
-                  }
-                : x,
-            ),
-            occurrence,
-          ];
         }
-      }
-      if (!updated)
-        updated = reminders.map((x) =>
-          x.id === id
-            ? { ...x, completed: true, completedAt: new Date().toISOString() }
-            : x,
+      } else {
+        await cancelReminderNotification(current.notificationId);
+        updated = reminders.map((r) =>
+          r.id === id
+            ? {
+                ...r,
+                completed: true,
+                completedAt: new Date().toISOString(),
+              }
+            : r,
         );
-      setReminders(updated);
+      }
       await saveReminders(updated);
+      setReminders(updated);
       setDetail(null);
     },
-    [reminders, settings.soundEnabled],
+    [reminders, settings.soundEnabled, detail],
   );
-
   useEffect(() => {
     const handle = (response) => {
+      if (!loaded || !response) return;
+      const responseKey =
+        response.notification.request.identifier +
+        ":" +
+        response.actionIdentifier;
+      if (handledResponse.current === responseKey) return;
+      handledResponse.current = responseKey;
       const data = response?.notification?.request?.content?.data;
       const id = data?.reminderId;
       if (id && response.actionIdentifier === COMPLETE_ACTION) markComplete(id);
@@ -249,21 +426,41 @@ export default function App() {
       })
       .catch(() => {});
     return () => subscription.remove();
-  }, [markComplete, reminders]);
-
+  }, [markComplete, reminders, loaded]);
   const updateSettings = async (patch) => {
-    const next = { ...settings, ...patch };
+    const previous = settingsRef.current;
+    const next = {
+      ...settingsRef.current,
+      ...patch,
+    };
+    settingsRef.current = next;
     setSettings(next);
-    await saveSettings(next);
     if ("soundEnabled" in patch)
-      await configureNotifications(next.soundEnabled);
+      setForegroundNotificationSound(next.soundEnabled);
+    try {
+      await saveSettings(next);
+    } catch (e) {
+      if (settingsRef.current === next) {
+        settingsRef.current = previous;
+        setSettings(previous);
+        setForegroundNotificationSound(previous.soundEnabled);
+      }
+      Alert.alert(
+        "Could not save settings",
+        e.message || "Check available device storage and try again.",
+      );
+    }
   };
-  const openNew = () => {
+  const openNew = (date = todayISO()) => {
+    if (typeof date !== "string") date = todayISO();
     setEditing(null);
     setForm({
       title: "",
       description: "",
-      date: todayISO(),
+      date,
+      weekdays: [new Date(`${date}T12:00:00`).getDay()],
+      monthDay: new Date(`${date}T12:00:00`).getDate(),
+      soundId: settings.defaultSoundId || null,
       time: timeNow(),
       repeat: settings.defaultRepeat || "none",
       repeatUntil: "",
@@ -275,7 +472,13 @@ export default function App() {
     setForm({
       title: r.title,
       description: r.description || "",
-      date: r.date,
+      date: r.seriesDate || r.date,
+      weekdays: r.weekdays || [
+        new Date(`${r.seriesDate || r.date}T12:00:00`).getDay(),
+      ],
+      monthDay:
+        r.monthDay || new Date(`${r.seriesDate || r.date}T12:00:00`).getDate(),
+      soundId: r.soundId || null,
       time: r.time,
       repeat: r.repeat || "none",
       repeatUntil: r.repeatUntil || "",
@@ -290,7 +493,10 @@ export default function App() {
         "Add a title",
         "Give your reminder a short, clear title.",
       );
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(form.date) || form.date < todayISO())
+    if (
+      !validDate(form.date) ||
+      (form.repeat === "none" && form.date < todayISO())
+    )
       return Alert.alert(
         "Check the date",
         "Choose today or a future date in YYYY-MM-DD format.",
@@ -306,15 +512,41 @@ export default function App() {
         "Check the date",
         "Enter a real calendar date in YYYY-MM-DD format.",
       );
-    if (target.getTime() <= Date.now())
+    if (form.repeat === "none" && target.getTime() <= Date.now())
       return Alert.alert(
         "Choose a future time",
         "This reminder time has already passed.",
       );
-    if (form.repeatUntil && form.repeatUntil < form.date)
+    if (form.repeat === "weekly" && !form.weekdays?.length)
+      return Alert.alert("Choose weekdays", "Select at least one weekday.");
+    if (
+      form.repeat === "monthly" &&
+      (!Number.isInteger(Number(form.monthDay)) ||
+        Number(form.monthDay) < 1 ||
+        Number(form.monthDay) > 31)
+    )
+      return Alert.alert(
+        "Choose a day",
+        "Enter a day from 1 to 31. Shorter months skip this occurrence.",
+      );
+    if (
+      form.repeatUntil &&
+      (!validDate(form.repeatUntil) || form.repeatUntil < form.date)
+    )
       return Alert.alert(
         "Check repeat end date",
         "Repeat end date must be on or after the first reminder date.",
+      );
+    if (
+      form.repeat !== "none" &&
+      !nextOccurrence({
+        ...form,
+        monthDay: Number(form.monthDay),
+      })
+    )
+      return Alert.alert(
+        "No future occurrences",
+        "Choose a repeat end date and schedule with a future occurrence.",
       );
     setBusy(true);
     try {
@@ -327,6 +559,12 @@ export default function App() {
         date: form.date,
         time: form.time,
         repeat: form.repeat,
+        weekdays: form.weekdays,
+        monthDay: Number(form.monthDay),
+        soundId: settings.defaultSoundId || null,
+        soundUri:
+          sounds.find((s) => s.id === settings.defaultSoundId)?.uri || null,
+        completedDates: editing?.completedDates || [],
         repeatUntil: form.repeatUntil,
         completed: false,
         createdAt: editing?.createdAt || new Date().toISOString(),
@@ -336,8 +574,8 @@ export default function App() {
       const next = editing
         ? reminders.map((r) => (r.id === editing.id ? item : r))
         : [...reminders, item];
-      setReminders(next);
       await saveReminders(next);
+      setReminders(next);
       setShowForm(false);
     } catch (e) {
       Alert.alert("Could not schedule reminder", String(e?.message || e));
@@ -350,274 +588,267 @@ export default function App() {
       "Delete reminder?",
       `“${r.title}” will be removed from this device.`,
       [
-        { text: "Cancel", style: "cancel" },
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
         {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
             await cancelReminderNotification(r.notificationId);
             const next = reminders.filter((x) => x.id !== r.id);
-            setReminders(next);
             await saveReminders(next);
+            setReminders(next);
             setDetail(null);
           },
         },
       ],
     );
-
-  const visible = useMemo(() => {
-    const nowDate = todayISO();
-    let rows = reminders.filter((r) => {
-      if (filter === "Completed") return r.completed;
-      if (filter === "Past") return !r.completed && r.date < nowDate;
-      if (filter === "Birthdays")
-        return /birthday|anniversary/i.test(r.title) || r.repeat === "yearly";
-      return !r.completed && r.date >= nowDate;
-    });
-    if (search.trim())
-      rows = rows.filter((r) =>
-        `${r.title} ${r.description}`
-          .toLowerCase()
-          .includes(search.toLowerCase()),
-      );
-    return rows.sort((a, b) =>
-      `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`),
+  const toggleSelection = (id) =>
+    setSelectedIds((ids) =>
+      ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
     );
-  }, [reminders, filter, search]);
-
+  const deleteMany = (ids) =>
+    Alert.alert(
+      "Delete reminders?",
+      `${ids.length} reminder${ids.length === 1 ? "" : "s"} will be permanently deleted from this device. This cannot be undone.`,
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: `Delete ${ids.length}`,
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const deletedIds = new Set(ids);
+              const next = reminders.filter((r) => !deletedIds.has(r.id));
+              for (const r of reminders.filter((r) => deletedIds.has(r.id)))
+                await cancelReminderNotification(r.notificationId);
+              await saveReminders(next);
+              setReminders(next);
+              setSelectedIds([]);
+            } catch (e) {
+              Alert.alert("Delete failed", e.message);
+            }
+          },
+        },
+      ],
+    );
+  const visible = useMemo(() => {
+    const now = new Date(clock);
+    const query = deferredSearch.trim().toLowerCase();
+    return reminders
+      .filter((r) => {
+        if (
+          query &&
+          !(r.title + " " + (r.description || "")).toLowerCase().includes(query)
+        )
+          return false;
+        if (filter === "Completed")
+          return r.completed || (r.completedDates || []).length > 0;
+        if (filter === "Missed") return isMissed(r, now);
+        return !r.completed && !isMissed(r, now);
+      })
+      .map((r) =>
+        filter === "Completed" && !r.completed
+          ? {
+              ...r,
+              seriesDate: r.date,
+              date: r.completedDates[r.completedDates.length - 1],
+              completed: true,
+            }
+          : displayOccurrence(r, now),
+      )
+      .filter(Boolean)
+      .map((r) =>
+        filter === "Missed"
+          ? {
+              ...r,
+              missed: true,
+            }
+          : r,
+      )
+      .sort((a, b) =>
+        (a.date + " " + a.time).localeCompare(b.date + " " + b.time),
+      );
+  }, [reminders, filter, deferredSearch, clock]);
+  const calendarRows = useMemo(
+    () =>
+      reminders
+        .filter((r) => occursOn(r, selectedDate, true))
+        .map((r) => ({
+          ...r,
+          seriesDate: r.date,
+          date: selectedDate,
+          completed:
+            r.completed || (r.completedDates || []).includes(selectedDate),
+        }))
+        .sort((a, b) => a.time.localeCompare(b.time)),
+    [reminders, selectedDate],
+  );
+  const stats = useMemo(
+    () => ({
+      active: reminders.filter((r) => !r.completed).length,
+      today: reminders.filter((r) => occursOn(r, localDate(new Date(clock))))
+        .length,
+      completed: reminders.filter(
+        (r) => r.completed || r.completedDates?.length,
+      ).length,
+    }),
+    [reminders, clock],
+  );
+  const calendarDays = useMemo(() => {
+    const year = calendarMonth.getFullYear(),
+      month = calendarMonth.getMonth();
+    const offset = new Date(year, month, 1).getDay();
+    return Array.from(
+      {
+        length: offset + new Date(year, month + 1, 0).getDate(),
+      },
+      (_, i) =>
+        i < offset ? null : localDate(new Date(year, month, i - offset + 1)),
+    );
+  }, [calendarMonth]);
+  const calendarMarks = useMemo(
+    () =>
+      new Set(
+        calendarDays.filter(
+          (date) => date && reminders.some((r) => occursOn(r, date)),
+        ),
+      ),
+    [calendarDays, reminders],
+  );
+  const moveMonth = (amount) =>
+    setCalendarMonth(
+      (d) => new Date(d.getFullYear(), d.getMonth() + amount, 1),
+    );
+  const openReminder = useCallback((item) => setDetail(item), []);
   const onImport = async () => {
     try {
       const imported = await importReminders();
       if (!imported) return;
+      const keys = new Set(reminders.map((r) => r.id));
+      const fingerprints = new Set(
+        reminders.map((r) =>
+          JSON.stringify([
+            r.title,
+            r.description,
+            r.date,
+            r.time,
+            r.repeat,
+            r.weekdays,
+            r.monthDay,
+            r.repeatUntil,
+          ]),
+        ),
+      );
       const valid = imported
-        .filter(
-          (r) =>
-            r &&
-            typeof r.title === "string" &&
-            r.title.trim() &&
-            /^\d{4}-\d{2}-\d{2}$/.test(r.date) &&
-            /^([01]\d|2[0-3]):[0-5]\d$/.test(r.time),
-        )
+        .filter((r) => {
+          const fingerprint = JSON.stringify([
+            r.title,
+            r.description,
+            r.date,
+            r.time,
+            r.repeat,
+            r.weekdays,
+            r.monthDay,
+            r.repeatUntil,
+          ]);
+          if (keys.has(r.id) || fingerprints.has(fingerprint)) return false;
+          keys.add(r.id);
+          fingerprints.add(fingerprint);
+          return true;
+        })
         .map((r) => ({
           ...r,
-          id: makeId(),
+          id: r.id || makeId(),
           notificationId: null,
-          completed: Boolean(r.completed),
-          repeat: r.repeat || "none",
-          createdAt: r.createdAt || new Date().toISOString(),
+          soundId: sounds.some((s) => s.id === r.soundId) ? r.soundId : null,
+          soundUri: sounds.find((s) => s.id === r.soundId)?.uri || null,
         }));
       const combined = [...reminders, ...valid];
-      for (const r of combined)
-        if (
-          !r.completed &&
-          `${r.date}T${r.time}:00` > new Date().toISOString().slice(0, 19)
-        )
+      if (Platform.OS !== "android")
+        for (const r of valid)
           r.notificationId = await scheduleReminder(r, settings.soundEnabled);
-      setReminders(combined);
       await saveReminders(combined);
+      setReminders(combined);
       Alert.alert("Import complete", `${valid.length} reminders imported.`);
     } catch (e) {
       Alert.alert(
         "Import failed",
-        e.message || "Please select a valid JSON backup or CSV export.",
+        e.message || "Please select a valid JSON backup.",
       );
     }
   };
   const exportWith = async (type) => {
     try {
-      if (type === "json") await exportJSON(reminders);
-      else await exportCSV(reminders);
+      const result = await exportJSON(reminders, type);
+      if (!result) return;
+      Alert.alert(
+        "Backup exported",
+        "Your JSON backup is ready. Imported sound files stay on this device; import them again on a new phone.",
+      );
     } catch (e) {
       Alert.alert("Export failed", e.message || "Could not export reminders.");
     }
   };
-
-  const Card = ({ children, style }) => (
-    <View
-      style={[
-        {
-          backgroundColor: palette.card,
-          borderColor: palette.border,
-          borderWidth: 1,
-          borderRadius: 20,
-          padding: 16,
-        },
-        style,
-      ]}
-    >
-      {children}
-    </View>
-  );
-  const Btn = ({
-    title,
-    onPress,
-    secondary = false,
-    icon = null,
-    danger = false,
-    disabled = false,
-  }) => (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      style={{
-        minHeight: 48,
-        borderRadius: 14,
-        paddingHorizontal: 16,
-        flexDirection: "row",
-        gap: 8,
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: danger
-          ? "#FCE8E8"
-          : secondary
-            ? palette.soft
-            : palette.brand,
-        opacity: disabled ? 0.55 : 1,
-      }}
-    >
-      {icon}
-      {
-        <Text
-          style={{
-            color: danger ? "#B91C1C" : secondary ? palette.text : "#FFFFFF",
-            fontWeight: "700",
-            fontSize: 14,
-          }}
-        >
-          {title}
-        </Text>
-      }
-    </Pressable>
-  );
-  const Label = ({ children }) => (
-    <Text
-      style={{
-        color: palette.muted,
-        fontSize: 12,
-        fontWeight: "700",
-        marginBottom: 7,
-        marginTop: 13,
-        letterSpacing: 0.4,
-      }}
-    >
-      {children}
-    </Text>
-  );
-  const Field = ({
-    value,
-    onChangeText,
-    placeholder,
-    multiline = false,
-    keyboardType = "default",
-  }) => (
-    <TextInput
-      value={value}
-      onChangeText={onChangeText}
-      placeholder={placeholder}
-      placeholderTextColor={palette.muted}
-      multiline={multiline}
-      keyboardType={keyboardType}
-      style={{
-        color: palette.text,
-        backgroundColor: palette.bg,
-        borderWidth: 1,
-        borderColor: palette.border,
-        borderRadius: 13,
-        paddingHorizontal: 13,
-        paddingVertical: 12,
-        minHeight: 48,
-        textAlignVertical: multiline ? "top" : "center",
-      }}
-    />
-  );
-  const Chip = ({ label, active, onPress }) => (
-    <Pressable
-      onPress={onPress}
-      style={{
-        paddingHorizontal: 15,
-        paddingVertical: 9,
-        borderRadius: 30,
-        backgroundColor: active ? palette.brand : palette.card,
-        borderColor: active ? palette.brand : palette.border,
-        borderWidth: 1,
-        marginRight: 8,
-      }}
-    >
-      <Text
+  if (loadError)
+    return (
+      <SafeAreaView
         style={{
-          color: active ? "white" : palette.muted,
-          fontWeight: "700",
-          fontSize: 12,
-        }}
-      >
-        {label}
-      </Text>
-    </Pressable>
-  );
-
-  const ReminderRow = ({ item }) => (
-    <Pressable
-      onPress={() => setDetail(item)}
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        padding: 14,
-        marginBottom: 10,
-        borderRadius: 18,
-        borderWidth: 1,
-        borderColor: palette.border,
-        backgroundColor: palette.card,
-      }}
-    >
-      <View
-        style={{
-          width: 46,
-          height: 46,
-          borderRadius: 15,
-          backgroundColor: palette.soft,
-          alignItems: "center",
+          flex: 1,
+          backgroundColor: palette.bg,
+          padding: 24,
           justifyContent: "center",
-          marginRight: 12,
         }}
       >
-        <CalendarDays color={palette.brand} size={21} />
-      </View>
-      <View style={{ flex: 1 }}>
         <Text
-          numberOfLines={1}
           style={{
             color: palette.text,
-            fontSize: 15,
+            fontSize: 20,
             fontWeight: "700",
-            textDecorationLine: item.completed ? "line-through" : "none",
           }}
         >
-          {item.title}
+          Could not read your reminders
         </Text>
         <Text
-          numberOfLines={1}
-          style={{ color: palette.muted, fontSize: 12, marginTop: 4 }}
+          style={{
+            color: palette.muted,
+            lineHeight: 22,
+            marginVertical: 16,
+          }}
         >
-          {formatDate(item.date)} · {formatTime(item.time)}
-          {item.repeat && item.repeat !== "none" ? ` · ${item.repeat}` : ""}
+          {loadError} Your stored reminders and alarms have not been cleared.
+          Check available device storage and try again.
         </Text>
-        {item.description ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => {
+            setLoadError(null);
+            setLoaded(false);
+            setLoadAttempt((n) => n + 1);
+          }}
+          style={{
+            backgroundColor: palette.brand,
+            padding: 16,
+            borderRadius: 14,
+          }}
+        >
           <Text
-            numberOfLines={1}
-            style={{ color: palette.muted, fontSize: 12, marginTop: 4 }}
+            style={{
+              color: palette.onBrand,
+              textAlign: "center",
+              fontWeight: "700",
+            }}
           >
-            {item.description}
+            Try again
           </Text>
-        ) : null}
-      </View>
-      {item.completed ? (
-        <CheckCircle2 color={palette.brand} size={22} />
-      ) : (
-        <ChevronRight color={palette.muted} size={20} />
-      )}
-    </Pressable>
-  );
-
+        </Pressable>
+      </SafeAreaView>
+    );
   if (!loaded)
     return (
       <SafeAreaView
@@ -629,948 +860,1806 @@ export default function App() {
         }}
       >
         <Sparkles size={32} color={C.brand} />
-        <Text style={{ marginTop: 12, color: palette.text }}>
+        <Text
+          style={{
+            marginTop: 12,
+            color: palette.text,
+          }}
+        >
           Getting your reminders ready…
         </Text>
       </SafeAreaView>
     );
-
   return (
     <SafeAreaView
-      style={{ flex: 1, backgroundColor: palette.bg }}
+      style={{
+        flex: 1,
+        backgroundColor: palette.bg,
+      }}
       edges={["top", "left", "right"]}
     >
-      <ExpoStatusBar style={isDark ? "light" : "dark"} />
-      <View style={{ flex: 1 }}>
-        {tab === "Home" && (
-          <ScrollView
-            contentContainerStyle={{ padding: 20, paddingBottom: 110 }}
+      <PaletteContext.Provider value={palette}>
+        <ExpoStatusBar style={isDark ? "light" : "dark"} />
+        {!permission && !bannerDismissed && (
+          <PermissionBanner
+            message="Enable notifications to receive your reminders on time."
+            onDismiss={() => setBannerDismissed(true)}
+            onEnable={async () => {
+              try {
+                if (NativeModules.ReminderNative)
+                  await NativeModules.ReminderNative.openSettings(
+                    "notifications",
+                  );
+                else await Linking.openSettings();
+              } catch {
+                Alert.alert(
+                  "Notification settings",
+                  "Open this app in system Settings and enable notifications.",
+                );
+              }
+            }}
+          />
+        )}
+        {(tab === "Home" || tab === "Calendar") && reminders.length > 0 && (
+          <View
+            style={{
+              flexDirection: "row",
+              gap: 10,
+              paddingHorizontal: 20,
+              paddingVertical: 8,
+            }}
           >
             <View
               style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: 22,
+                flex: 1,
               }}
             >
-              <View>
-                <Text style={{ color: palette.muted, fontSize: 13 }}>
-                  YOUR PERSONAL ASSISTANT
-                </Text>
-                <Text
-                  style={{
-                    color: palette.text,
-                    fontSize: 28,
-                    fontWeight: "800",
-                    marginTop: 3,
-                  }}
-                >
-                  Make time matter.
-                </Text>
-              </View>
-              <Pressable
-                onPress={() => setTab("Settings")}
-                style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 15,
-                  backgroundColor: palette.card,
-                  borderColor: palette.border,
-                  borderWidth: 1,
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <SettingsIcon color={palette.text} />
-              </Pressable>
+              <Btn
+                secondary
+                title={
+                  selectedIds.length
+                    ? `Delete selected (${selectedIds.length})`
+                    : "Delete all"
+                }
+                onPress={() =>
+                  deleteMany(
+                    selectedIds.length
+                      ? selectedIds
+                      : reminders.map((r) => r.id),
+                  )
+                }
+              />
             </View>
-            <View
-              style={{
-                backgroundColor: palette.brand,
-                borderRadius: 24,
+            {!!selectedIds.length && (
+              <Btn
+                secondary
+                title="Cancel"
+                onPress={() => setSelectedIds([])}
+              />
+            )}
+          </View>
+        )}
+        <View
+          style={{
+            flex: 1,
+          }}
+        >
+          {tab === "Home" && (
+            <FlatList
+              data={visible}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <ReminderRow
+                  item={item}
+                  selected={selectedIds.includes(item.id)}
+                  onLongPress={() => toggleSelection(item.id)}
+                  onOpen={(r) =>
+                    selectedIds.length ? toggleSelection(r.id) : openReminder(r)
+                  }
+                />
+              )}
+              initialNumToRender={12}
+              maxToRenderPerBatch={12}
+              windowSize={7}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{
                 padding: 20,
-                marginBottom: 22,
-                overflow: "hidden",
+                paddingBottom: 110,
               }}
-            >
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                }}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text
-                    style={{
-                      color: "#CCFBF1",
-                      fontSize: 12,
-                      fontWeight: "700",
-                    }}
-                  >
-                    A LITTLE MORE PEACE OF MIND
-                  </Text>
-                  <Text
-                    style={{
-                      color: "#FFFFFF",
-                      fontSize: 23,
-                      fontWeight: "800",
-                      marginTop: 8,
-                    }}
-                  >
-                    Remember what matters.
-                  </Text>
-                  <Text
-                    style={{
-                      color: "#D1FAE5",
-                      fontSize: 13,
-                      marginTop: 7,
-                      lineHeight: 19,
-                    }}
-                  >
-                    Big moments, tiny tasks — let us keep track.
-                  </Text>
-                </View>
-                <Bell color="#D1FAE5" size={50} />
-              </View>
-              <Pressable
-                onPress={openNew}
-                style={{
-                  backgroundColor: "#FFFFFF",
-                  borderRadius: 13,
-                  paddingVertical: 12,
-                  paddingHorizontal: 14,
-                  alignSelf: "flex-start",
-                  marginTop: 18,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                <Plus color={C.brand} size={18} />
-                <Text style={{ color: C.brand, fontWeight: "800" }}>
-                  Create reminder
-                </Text>
-              </Pressable>
-            </View>
-            <View style={{ flexDirection: "row", gap: 10, marginBottom: 23 }}>
-              {[
-                {
-                  n: reminders.filter((r) => !r.completed).length,
-                  l: "Active",
-                  color: "#D1FAE5",
-                },
-                {
-                  n: reminders.filter(
-                    (r) => !r.completed && r.date === todayISO(),
-                  ).length,
-                  l: "Today",
-                  color: "#FEF3C7",
-                },
-                {
-                  n: reminders.filter((r) => r.completed).length,
-                  l: "Completed",
-                  color: "#DBEAFE",
-                },
-              ].map((s) => (
-                <View
-                  key={s.l}
-                  style={{
-                    flex: 1,
-                    backgroundColor: palette.card,
-                    borderColor: palette.border,
-                    borderWidth: 1,
-                    borderRadius: 17,
-                    padding: 13,
-                  }}
-                >
+              ListHeaderComponent={
+                <View>
                   <View
                     style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: 5,
-                      backgroundColor: s.color,
-                      marginBottom: 10,
-                    }}
-                  />
-                  <Text
-                    style={{
-                      color: palette.text,
-                      fontSize: 23,
-                      fontWeight: "800",
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: 22,
                     }}
                   >
-                    {s.n}
-                  </Text>
-                  <Text
-                    style={{ color: palette.muted, fontSize: 11, marginTop: 3 }}
-                  >
-                    {s.l}
-                  </Text>
-                </View>
-              ))}
-            </View>
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: 13,
-              }}
-            >
-              <Text
-                style={{ color: palette.text, fontSize: 19, fontWeight: "800" }}
-              >
-                Your reminders
-              </Text>
-              <Pressable onPress={() => setTab("Calendar")}>
-                <Text style={{ color: palette.brand, fontWeight: "700" }}>
-                  View calendar
-                </Text>
-              </Pressable>
-            </View>
-            <View style={{ flexDirection: "row", marginBottom: 14 }}>
-              {["Upcoming", "Completed", "Birthdays"].map((x) => (
-                <Chip
-                  key={x}
-                  label={x}
-                  active={filter === x}
-                  onPress={() => setFilter(x)}
-                />
-              ))}
-            </View>
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                backgroundColor: palette.card,
-                borderWidth: 1,
-                borderColor: palette.border,
-                borderRadius: 14,
-                paddingHorizontal: 12,
-                marginBottom: 14,
-              }}
-            >
-              <Search color={palette.muted} size={18} />
-              <TextInput
-                value={search}
-                onChangeText={setSearch}
-                placeholder="Search reminders"
-                placeholderTextColor={palette.muted}
-                style={{ flex: 1, padding: 12, color: palette.text }}
-              />
-              {search ? (
-                <Pressable onPress={() => setSearch("")}>
-                  <X size={16} color={palette.muted} />
-                </Pressable>
-              ) : null}
-            </View>
-            {visible.length ? (
-              visible
-                .slice(0, 30)
-                .map((item) => <ReminderRow key={item.id} item={item} />)
-            ) : (
-              <Card>
-                <View style={{ alignItems: "center", paddingVertical: 20 }}>
-                  <CalendarDays color={palette.brand} size={34} />
-                  <Text
-                    style={{
-                      color: palette.text,
-                      fontWeight: "800",
-                      fontSize: 16,
-                      marginTop: 12,
-                    }}
-                  >
-                    A little room to breathe
-                  </Text>
-                  <Text
-                    style={{
-                      color: palette.muted,
-                      textAlign: "center",
-                      marginTop: 6,
-                      lineHeight: 20,
-                    }}
-                  >
-                    No reminders here yet. Add one now and let your mind focus
-                    on what matters.
-                  </Text>
-                  <View style={{ marginTop: 16, width: "100%" }}>
-                    <Btn
-                      title="Add your first reminder"
-                      onPress={openNew}
-                      icon={<Plus color="white" size={18} />}
-                    />
-                  </View>
-                </View>
-              </Card>
-            )}
-            <Text
-              style={{
-                color: palette.muted,
-                fontSize: 11,
-                textAlign: "center",
-                marginTop: 16,
-              }}
-            >
-              Private by design · Stored on this device
-            </Text>
-          </ScrollView>
-        )}
-
-        {tab === "Calendar" && (
-          <ScrollView
-            contentContainerStyle={{ padding: 20, paddingBottom: 110 }}
-          >
-            <Text
-              style={{ color: palette.text, fontSize: 28, fontWeight: "800" }}
-            >
-              Your calendar
-            </Text>
-            <Text
-              style={{ color: palette.muted, marginTop: 5, marginBottom: 20 }}
-            >
-              A simple view of what is coming up.
-            </Text>
-            <Card>
-              <Text
-                style={{
-                  color: palette.text,
-                  fontSize: 18,
-                  fontWeight: "800",
-                  marginBottom: 14,
-                }}
-              >
-                {new Date().toLocaleDateString(undefined, {
-                  month: "long",
-                  year: "numeric",
-                })}
-              </Text>
-              <View style={{ flexDirection: "row", flexWrap: "wrap" }}>
-                {Array.from(
-                  {
-                    length: new Date(
-                      new Date().getFullYear(),
-                      new Date().getMonth() + 1,
-                      0,
-                    ).getDate(),
-                  },
-                  (_, i) => i + 1,
-                ).map((day) => {
-                  const d = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-                  const has = reminders.some(
-                    (r) => r.date === d && !r.completed,
-                  );
-                  return (
-                    <View
-                      key={day}
+                    <View>
+                      <Text
+                        style={{
+                          color: palette.muted,
+                          fontSize: 13,
+                        }}
+                      >
+                        YOUR PERSONAL ASSISTANT
+                      </Text>
+                      <Text
+                        style={{
+                          color: palette.text,
+                          fontSize: 28,
+                          fontWeight: "800",
+                          marginTop: 3,
+                        }}
+                      >
+                        Make time matter.
+                      </Text>
+                    </View>
+                    <Pressable
+                      onPress={() => setTab("Settings")}
                       style={{
-                        width: "14.28%",
+                        width: 44,
+                        height: 44,
+                        borderRadius: 15,
+                        backgroundColor: palette.card,
+                        borderColor: palette.border,
+                        borderWidth: 1,
                         alignItems: "center",
-                        paddingVertical: 9,
+                        justifyContent: "center",
+                      }}
+                    >
+                      <SettingsIcon color={palette.text} />
+                    </Pressable>
+                  </View>
+                  <View
+                    style={{
+                      backgroundColor: C.brand,
+                      borderRadius: 24,
+                      padding: 20,
+                      marginBottom: 22,
+                      overflow: "hidden",
+                    }}
+                  >
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "space-between",
                       }}
                     >
                       <View
                         style={{
-                          width: 32,
-                          height: 32,
-                          borderRadius: 16,
-                          alignItems: "center",
-                          justifyContent: "center",
-                          backgroundColor:
-                            d === todayISO() ? palette.brand : "transparent",
+                          flex: 1,
                         }}
                       >
                         <Text
                           style={{
-                            color: d === todayISO() ? "white" : palette.text,
-                            fontWeight: d === todayISO() ? "800" : "500",
+                            color: "#CCFBF1",
+                            fontSize: 12,
+                            fontWeight: "700",
                           }}
                         >
-                          {day}
+                          A LITTLE MORE PEACE OF MIND
+                        </Text>
+                        <Text
+                          style={{
+                            color: "#FFFFFF",
+                            fontSize: 23,
+                            fontWeight: "800",
+                            marginTop: 8,
+                          }}
+                        >
+                          Remember what matters.
+                        </Text>
+                        <Text
+                          style={{
+                            color: "#D1FAE5",
+                            fontSize: 13,
+                            marginTop: 7,
+                            lineHeight: 19,
+                          }}
+                        >
+                          Big moments, tiny tasks — let us keep track.
                         </Text>
                       </View>
-                      {has ? (
-                        <View
-                          style={{
-                            width: 5,
-                            height: 5,
-                            borderRadius: 3,
-                            backgroundColor: palette.brand,
-                            marginTop: 2,
-                          }}
-                        />
-                      ) : (
-                        <View style={{ height: 7 }} />
-                      )}
+                      <Bell color="#D1FAE5" size={50} />
                     </View>
-                  );
-                })}
-              </View>
-            </Card>
-            <Text
-              style={{
-                color: palette.text,
-                fontSize: 19,
-                fontWeight: "800",
-                marginTop: 24,
-                marginBottom: 12,
-              }}
-            >
-              Upcoming events
-            </Text>
-            {reminders
-              .filter((r) => !r.completed)
-              .sort((a, b) =>
-                `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`),
-              )
-              .map((item) => (
-                <ReminderRow key={item.id} item={item} />
-              ))}
-            {reminders.filter((r) => !r.completed).length === 0 && (
-              <Text style={{ color: palette.muted }}>
-                Your calendar is clear. Enjoy the space.
-              </Text>
-            )}
-          </ScrollView>
-        )}
+                    <Pressable
+                      onPress={openNew}
+                      style={{
+                        backgroundColor: "#FFFFFF",
+                        borderRadius: 13,
+                        paddingVertical: 12,
+                        paddingHorizontal: 14,
+                        alignSelf: "flex-start",
+                        marginTop: 18,
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <Plus color={C.brand} size={18} />
+                      <Text
+                        style={{
+                          color: C.brand,
+                          fontWeight: "800",
+                        }}
+                      >
+                        Create reminder
+                      </Text>
+                    </Pressable>
+                  </View>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      gap: 10,
+                      marginBottom: 23,
+                    }}
+                  >
+                    {[
+                      {
+                        n: stats.active,
+                        l: "Active",
+                        color: "#D1FAE5",
+                      },
+                      {
+                        n: stats.today,
+                        l: "Today",
+                        color: "#FEF3C7",
+                      },
+                      {
+                        n: stats.completed,
+                        l: "Completed",
+                        color: "#DBEAFE",
+                      },
+                    ].map((s) => (
+                      <View
+                        key={s.l}
+                        style={{
+                          flex: 1,
+                          backgroundColor: palette.card,
+                          borderColor: palette.border,
+                          borderWidth: 1,
+                          borderRadius: 17,
+                          padding: 15,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: palette.text,
+                            fontSize: 23,
+                            fontWeight: "800",
+                          }}
+                        >
+                          {s.n}
+                        </Text>
+                        <Text
+                          style={{
+                            color: palette.muted,
+                            fontSize: 11,
+                            marginTop: 3,
+                          }}
+                        >
+                          {s.l}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: 13,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: palette.text,
+                        fontSize: 19,
+                        fontWeight: "800",
+                      }}
+                    >
+                      Your reminders
+                    </Text>
+                    <Pressable onPress={() => setTab("Calendar")}>
+                      <Text
+                        style={{
+                          color: palette.brand,
+                          fontWeight: "700",
+                        }}
+                      >
+                        View calendar
+                      </Text>
+                    </Pressable>
+                  </View>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      marginBottom: 14,
+                    }}
+                  >
+                    {["Upcoming", "Completed", "Missed"].map((x) => (
+                      <Chip
+                        key={x}
+                        label={x}
+                        active={filter === x}
+                        onPress={() => setFilter(x)}
+                      />
+                    ))}
+                  </View>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      backgroundColor: palette.card,
+                      borderWidth: 1,
+                      borderColor: palette.border,
+                      borderRadius: 14,
+                      paddingHorizontal: 12,
+                      marginBottom: 14,
+                    }}
+                  >
+                    <Search color={palette.muted} size={18} />
+                    <TextInput
+                      value={search}
+                      onChangeText={setSearch}
+                      placeholder="Search reminders"
+                      placeholderTextColor={palette.muted}
+                      style={{
+                        flex: 1,
+                        padding: 12,
+                        color: palette.text,
+                      }}
+                    />
+                    {search ? (
+                      <Pressable onPress={() => setSearch("")}>
+                        <X size={16} color={palette.muted} />
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+              }
+              ListEmptyComponent={
+                <Card>
+                  <View
+                    style={{
+                      alignItems: "center",
+                      paddingVertical: 20,
+                    }}
+                  >
+                    <CalendarDays color={palette.brand} size={34} />
+                    <Text
+                      style={{
+                        color: palette.text,
+                        fontWeight: "800",
+                        fontSize: 16,
+                        marginTop: 12,
+                      }}
+                    >
+                      A little room to breathe
+                    </Text>
+                    <Text
+                      style={{
+                        color: palette.muted,
+                        textAlign: "center",
+                        marginTop: 6,
+                        lineHeight: 20,
+                      }}
+                    >
+                      No reminders here yet. Add one now and let your mind focus
+                      on what matters.
+                    </Text>
+                    <View
+                      style={{
+                        marginTop: 16,
+                        width: "100%",
+                      }}
+                    >
+                      <Btn
+                        title="Add your first reminder"
+                        onPress={openNew}
+                        icon={<Plus color="white" size={18} />}
+                      />
+                    </View>
+                  </View>
+                </Card>
+              }
+            />
+          )}
 
-        {tab === "Settings" && (
-          <ScrollView
-            contentContainerStyle={{ padding: 20, paddingBottom: 110 }}
-          >
-            <Text
-              style={{ color: palette.text, fontSize: 28, fontWeight: "800" }}
-            >
-              Settings
-            </Text>
-            <Text
-              style={{ color: palette.muted, marginTop: 5, marginBottom: 22 }}
-            >
-              Make Reminder Pro work your way.
-            </Text>
-            <Text
-              style={{
-                color: palette.muted,
-                fontSize: 12,
-                fontWeight: "800",
-                letterSpacing: 1,
-                marginBottom: 10,
+          {tab === "Calendar" && (
+            <FlatList
+              data={calendarRows}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <ReminderRow
+                  item={item}
+                  selected={selectedIds.includes(item.id)}
+                  onLongPress={() => toggleSelection(item.id)}
+                  onOpen={(r) =>
+                    selectedIds.length ? toggleSelection(r.id) : openReminder(r)
+                  }
+                />
+              )}
+              initialNumToRender={12}
+              maxToRenderPerBatch={12}
+              windowSize={7}
+              contentContainerStyle={{
+                padding: 20,
+                paddingBottom: 110,
               }}
-            >
-              PERSONAL EXPERIENCE
-            </Text>
-            <Card style={{ padding: 0, overflow: "hidden", marginBottom: 22 }}>
-              <SettingRow
-                palette={palette}
-                icon={<Sun color={palette.brand} />}
-                title="Appearance"
-                subtitle="Choose light, dark or follow device"
-                right={
-                  <Text style={{ color: palette.brand, fontWeight: "800" }}>
-                    {settings.theme === "system"
-                      ? "System"
-                      : settings.theme === "dark"
-                        ? "Dark"
-                        : "Light"}
-                  </Text>
-                }
-                onPress={() =>
-                  Alert.alert("Appearance", "Choose a theme", [
-                    {
-                      text: "Light",
-                      onPress: () => updateSettings({ theme: "light" }),
-                    },
-                    {
-                      text: "Dark",
-                      onPress: () => updateSettings({ theme: "dark" }),
-                    },
-                    {
-                      text: "Follow device",
-                      onPress: () => updateSettings({ theme: "system" }),
-                    },
-                    { text: "Cancel", style: "cancel" },
-                  ])
-                }
-              />
-              <SettingRow
-                palette={palette}
-                icon={<Volume2 color={palette.brand} />}
-                title="Reminder sound"
-                subtitle="Use the built-in notification sound"
-                right={
-                  <Switch
-                    value={settings.soundEnabled}
-                    onValueChange={(v) => updateSettings({ soundEnabled: v })}
-                    trackColor={{ true: palette.brand }}
-                  />
-                }
-              />
-              <SettingRow
-                palette={palette}
-                icon={<Bell color={palette.brand} />}
-                title="Keep reminder in app"
-                subtitle="Swiping a notification never deletes its reminder"
-                right={
-                  <Switch
-                    value={settings.keepReminderAfterDismiss}
-                    onValueChange={(v) =>
-                      updateSettings({ keepReminderAfterDismiss: v })
-                    }
-                    trackColor={{ true: palette.brand }}
-                  />
-                }
-              />
-              <SettingRow
-                palette={palette}
-                icon={<CircleHelp color={palette.brand} />}
-                title="Confirm before clearing"
-                subtitle="Ask before marking a reminder complete in-app"
-                right={
-                  <Switch
-                    value={settings.confirmBeforeClear}
-                    onValueChange={(v) =>
-                      updateSettings({ confirmBeforeClear: v })
-                    }
-                    trackColor={{ true: palette.brand }}
-                  />
-                }
-                last
-              />
-            </Card>
-            <Text
-              style={{
-                color: palette.muted,
-                fontSize: 12,
-                fontWeight: "800",
-                letterSpacing: 1,
-                marginBottom: 10,
-              }}
-            >
-              BACKUP & RESTORE
-            </Text>
-            <Card style={{ padding: 0, overflow: "hidden", marginBottom: 22 }}>
-              <SettingRow
-                palette={palette}
-                icon={<Download color={palette.brand} />}
-                title="Export JSON backup"
-                subtitle="Best for restoring reminders and repeat settings"
-                onPress={() => exportWith("json")}
-                right={<ChevronRight color={palette.muted} />}
-              />
-              <SettingRow
-                palette={palette}
-                icon={<Download color={palette.brand} />}
-                title="Export CSV"
-                subtitle="Open in spreadsheet apps"
-                onPress={() => exportWith("csv")}
-                right={<ChevronRight color={palette.muted} />}
-              />
-              <SettingRow
-                palette={palette}
-                icon={<FileUp color={palette.brand} />}
-                title="Import backup or CSV"
-                subtitle="Restore reminders on this phone"
-                onPress={onImport}
-                right={<ChevronRight color={palette.muted} />}
-                last
-              />
-            </Card>
-            <Text
-              style={{
-                color: palette.muted,
-                fontSize: 12,
-                fontWeight: "800",
-                letterSpacing: 1,
-                marginBottom: 10,
-              }}
-            >
-              ABOUT YOUR DATA
-            </Text>
-            <Card>
-              <View
-                style={{
-                  flexDirection: "row",
-                  gap: 12,
-                  alignItems: "flex-start",
-                }}
-              >
-                <Heart color={palette.brand} size={23} />
-                <View style={{ flex: 1 }}>
+              ListHeaderComponent={
+                <View>
                   <Text
                     style={{
                       color: palette.text,
+                      fontSize: 28,
                       fontWeight: "800",
-                      fontSize: 15,
+                      marginBottom: 20,
                     }}
                   >
-                    Your reminders belong to you.
+                    Your calendar
                   </Text>
+                  <Card>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <Pressable
+                        accessibilityLabel="Previous month"
+                        onPress={() => moveMonth(-1)}
+                        hitSlop={12}
+                      >
+                        <ChevronLeft color={palette.brand} />
+                      </Pressable>
+                      <Text
+                        style={{
+                          color: palette.text,
+                          fontSize: 18,
+                          fontWeight: "800",
+                        }}
+                      >
+                        {calendarMonth.toLocaleDateString(undefined, {
+                          month: "long",
+                          year: "numeric",
+                        })}
+                      </Text>
+                      <Pressable
+                        accessibilityLabel="Next month"
+                        onPress={() => moveMonth(1)}
+                        hitSlop={12}
+                      >
+                        <ChevronRight color={palette.brand} />
+                      </Pressable>
+                    </View>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        flexWrap: "wrap",
+                        gap: 8,
+                        justifyContent: "space-between",
+                        marginVertical: 14,
+                      }}
+                    >
+                      <Chip
+                        label="Previous year"
+                        onPress={() => moveMonth(-12)}
+                      />
+                      <Chip
+                        label="Today"
+                        onPress={() => {
+                          setCalendarMonth(new Date());
+                          setSelectedDate(todayISO());
+                        }}
+                      />
+                      <Chip label="Next year" onPress={() => moveMonth(12)} />
+                    </View>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                      }}
+                    >
+                      {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
+                        (day) => (
+                          <Text
+                            key={day}
+                            style={{
+                              width: "14.28%",
+                              textAlign: "center",
+                              color: palette.muted,
+                              fontSize: 11,
+                            }}
+                          >
+                            {day}
+                          </Text>
+                        ),
+                      )}
+                    </View>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      {calendarDays.map((date, i) => (
+                        <Pressable
+                          key={date || i}
+                          disabled={!date}
+                          accessibilityRole="button"
+                          accessibilityLabel={date || undefined}
+                          accessibilityState={{
+                            selected: date === selectedDate,
+                          }}
+                          onPress={() => setSelectedDate(date)}
+                          style={{
+                            width: "14.28%",
+                            alignItems: "center",
+                            paddingVertical: 8,
+                          }}
+                        >
+                          <View
+                            style={{
+                              width: 34,
+                              height: 34,
+                              borderRadius: 17,
+                              alignItems: "center",
+                              justifyContent: "center",
+                              backgroundColor:
+                                date === selectedDate
+                                  ? palette.brand
+                                  : "transparent",
+                            }}
+                          >
+                            <Text
+                              style={{
+                                color:
+                                  date === selectedDate
+                                    ? palette.onBrand
+                                    : palette.text,
+                              }}
+                            >
+                              {date ? Number(date.slice(-2)) : ""}
+                            </Text>
+                          </View>
+                          <View
+                            style={{
+                              height: 5,
+                              width: 5,
+                              borderRadius: 3,
+                              backgroundColor: calendarMarks.has(date)
+                                ? palette.brand
+                                : "transparent",
+                              marginTop: 3,
+                            }}
+                          />
+                        </Pressable>
+                      ))}
+                    </View>
+                  </Card>
                   <Text
                     style={{
-                      color: palette.muted,
-                      lineHeight: 20,
-                      marginTop: 7,
-                      fontSize: 13,
+                      color: palette.text,
+                      fontSize: 19,
+                      fontWeight: "800",
+                      marginVertical: 16,
                     }}
                   >
-                    No login, no profile and no cloud account. Your reminders
-                    are stored locally on this device. Export a backup before
-                    changing phones or uninstalling the app. OS settings can
-                    still silence or delay notifications.
+                    {formatDate(selectedDate)}
                   </Text>
+                  <View
+                    style={{
+                      marginBottom: 16,
+                    }}
+                  >
+                    <Btn
+                      title="Create reminder on this date"
+                      onPress={() => openNew(selectedDate)}
+                    />
+                  </View>
                 </View>
-              </View>
-              <View
-                style={{
-                  height: 1,
-                  backgroundColor: palette.border,
-                  marginVertical: 16,
-                }}
-              />
-              <Text style={{ color: palette.muted, fontSize: 12 }}>
-                Reminder Pro · Version 1.0.0 · Offline-first
-              </Text>
-            </Card>
-          </ScrollView>
-        )}
-
-        <View
-          style={{
-            position: "absolute",
-            bottom: 0,
-            left: 0,
-            right: 0,
-            backgroundColor: palette.card,
-            borderTopWidth: 1,
-            borderTopColor: palette.border,
-            paddingTop: 10,
-            paddingBottom: Platform.OS === "ios" ? 12 : 10,
-            flexDirection: "row",
-            justifyContent: "space-around",
-          }}
-        >
-          {[
-            { name: "Home", icon: Home },
-            { name: "Calendar", icon: CalendarDays },
-            { name: "Settings", icon: SettingsIcon },
-          ].map((x) => {
-            const I = x.icon;
-            const active = tab === x.name;
-            return (
-              <Pressable
-                key={x.name}
-                onPress={() => setTab(x.name)}
-                style={{ alignItems: "center", gap: 4, minWidth: 70 }}
-              >
-                <I size={21} color={active ? palette.brand : palette.muted} />
+              }
+              ListEmptyComponent={
                 <Text
                   style={{
-                    color: active ? palette.brand : palette.muted,
-                    fontSize: 11,
-                    fontWeight: active ? "800" : "600",
+                    color: palette.muted,
                   }}
                 >
-                  {x.name}
+                  No reminders scheduled for this date.
                 </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </View>
+              }
+            />
+          )}
 
-      <Modal
-        visible={showForm}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setShowForm(false)}
-      >
-        <SafeAreaView style={{ flex: 1, backgroundColor: palette.bg }}>
-          <KeyboardAvoidingView
-            style={{ flex: 1 }}
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
-          >
+          {tab === "Settings" && (
             <ScrollView
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+              contentContainerStyle={{
+                padding: 20,
+                paddingBottom: 110,
+              }}
             >
-              <View
+              <Text
                 style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  marginBottom: 16,
+                  color: palette.text,
+                  fontSize: 28,
+                  fontWeight: "800",
                 }}
               >
-                <Pressable
-                  onPress={() => setShowForm(false)}
-                  style={{
-                    width: 42,
-                    height: 42,
-                    borderRadius: 14,
-                    backgroundColor: palette.card,
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <X color={palette.text} />
-                </Pressable>
+                Settings
+              </Text>
+              <Text
+                style={{
+                  color: palette.muted,
+                  marginTop: 5,
+                  marginBottom: 22,
+                }}
+              >
+                Make Offline Reminder work your way.
+              </Text>
+              <Text
+                style={{
+                  color: palette.muted,
+                  fontSize: 12,
+                  fontWeight: "800",
+                  letterSpacing: 1,
+                  marginBottom: 10,
+                }}
+              >
+                PERSONAL EXPERIENCE
+              </Text>
+              <Card
+                style={{
+                  padding: 0,
+                  overflow: "hidden",
+                  marginBottom: 22,
+                }}
+              >
+                <SettingRow
+                  palette={palette}
+                  icon={<Sun color={palette.brand} />}
+                  title="Appearance"
+                  subtitle="Choose light, dark or follow device"
+                  right={
+                    <Text
+                      style={{
+                        color: palette.brand,
+                        fontWeight: "800",
+                      }}
+                    >
+                      {settings.theme === "system"
+                        ? "System"
+                        : settings.theme === "dark"
+                          ? "Dark"
+                          : "Light"}
+                    </Text>
+                  }
+                  onPress={() =>
+                    Alert.alert("Appearance", "Choose a theme", [
+                      {
+                        text: "Light",
+                        onPress: () =>
+                          updateSettings({
+                            theme: "light",
+                          }),
+                      },
+                      {
+                        text: "Dark",
+                        onPress: () =>
+                          updateSettings({
+                            theme: "dark",
+                          }),
+                      },
+                      {
+                        text: "Follow device",
+                        onPress: () =>
+                          updateSettings({
+                            theme: "system",
+                          }),
+                      },
+                      {
+                        text: "Cancel",
+                        style: "cancel",
+                      },
+                    ])
+                  }
+                />
+                <SettingRow
+                  palette={palette}
+                  icon={<Volume2 color={palette.brand} />}
+                  title="Reminder Sound"
+                  subtitle={
+                    (
+                      sounds.find((s) => s.id === settings.defaultSoundId) ||
+                      BUILT_IN_SOUNDS.find(
+                        (s) => s.id === (settings.defaultSoundId || null),
+                      )
+                    )?.name || "Reminder"
+                  }
+                  onPress={() => setShowSounds(true)}
+                  right={<ChevronRight color={palette.muted} />}
+                  last
+                />
+              </Card>
+              <Card
+                style={{
+                  marginBottom: 22,
+                }}
+              >
+                {alarmStatus && (
+                  <Text
+                    style={{
+                      color: palette.text,
+                      marginBottom: 12,
+                    }}
+                  >
+                    Alarm timing:{" "}
+                    {alarmStatus.exact
+                      ? "Exact alarms allowed"
+                      : "Approximate · access unavailable"}
+                  </Text>
+                )}
+                {alarmStatus && !alarmStatus.exact && (
+                  <Btn
+                    secondary
+                    title="Enable precise timing"
+                    onPress={() =>
+                      NativeModules.ReminderNative?.openSettings(
+                        "alarms",
+                      ).catch((e) => Alert.alert("Settings", e.message))
+                    }
+                  />
+                )}
                 <Text
                   style={{
-                    color: palette.text,
-                    fontSize: 20,
-                    fontWeight: "800",
+                    color: palette.muted,
+                    fontSize: 12,
+                    marginTop: 12,
+                    lineHeight: 18,
                   }}
                 >
-                  {editing ? "Edit reminder" : "New reminder"}
+                  Allow alarms & reminders for precise delivery. Without access
+                  Android uses approximate alarms and may prevent continuous
+                  audio in the background. No battery exemption is needed. Force
+                  stopping, silent channels and device settings can delay or
+                  silence reminders.
                 </Text>
-                <View style={{ width: 42 }} />
-              </View>
-              <Text style={{ color: palette.muted, marginBottom: 18 }}>
-                A title, a time, and you are all set.
-              </Text>
-              <Label>REMINDER TITLE *</Label>
-              <Field
-                value={form.title}
-                onChangeText={(v) => setForm((p) => ({ ...p, title: v }))}
-                placeholder="e.g. Mom's birthday"
-              />
-              <Label>DESCRIPTION (OPTIONAL)</Label>
-              <Field
-                value={form.description}
-                onChangeText={(v) => setForm((p) => ({ ...p, description: v }))}
-                placeholder="Add a note or a little context…"
-                multiline
-              />
-              <Label>DATE · YYYY-MM-DD</Label>
-              <Field
-                value={form.date}
-                onChangeText={(v) => setForm((p) => ({ ...p, date: v }))}
-                placeholder="2026-12-24"
-                keyboardType="numbers-and-punctuation"
-              />
+              </Card>
               <Text
-                style={{ color: palette.muted, fontSize: 11, marginTop: 5 }}
+                style={{
+                  color: palette.muted,
+                  fontSize: 12,
+                  fontWeight: "800",
+                  letterSpacing: 1,
+                  marginBottom: 10,
+                }}
               >
-                Use today or a future date.
+                BACKUP & RESTORE
               </Text>
-              <Label>TIME · 24-HOUR HH:MM</Label>
-              <Field
-                value={form.time}
-                onChangeText={(v) => setForm((p) => ({ ...p, time: v }))}
-                placeholder="09:30"
-                keyboardType="numbers-and-punctuation"
-              />
-              <Label>REPEAT</Label>
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                {[
-                  { v: "none", l: "Never" },
-                  { v: "daily", l: "Daily" },
-                  { v: "weekly", l: "Weekly" },
-                  { v: "monthly", l: "Monthly" },
-                  { v: "yearly", l: "Yearly" },
-                ].map((o) => (
-                  <Chip
-                    key={o.v}
-                    label={o.l}
-                    active={form.repeat === o.v}
-                    onPress={() => setForm((p) => ({ ...p, repeat: o.v }))}
-                  />
-                ))}
-              </View>
-              {form.repeat !== "none" && (
-                <>
-                  <Label>REPEAT UNTIL (OPTIONAL) · YYYY-MM-DD</Label>
-                  <Field
-                    value={form.repeatUntil}
-                    onChangeText={(v) =>
-                      setForm((p) => ({ ...p, repeatUntil: v }))
-                    }
-                    placeholder="Leave empty to repeat indefinitely"
-                  />
-                </>
-              )}
-              <View style={{ marginTop: 26 }}>
-                <Btn
-                  title={
-                    busy
-                      ? "Saving…"
-                      : editing
-                        ? "Save changes"
-                        : "Save reminder"
+              <Card
+                style={{
+                  padding: 0,
+                  overflow: "hidden",
+                  marginBottom: 22,
+                }}
+              >
+                <SettingRow
+                  palette={palette}
+                  icon={<Download color={palette.brand} />}
+                  title="Export Backup"
+                  subtitle="Best for restoring reminders and repeat settings"
+                  onPress={() =>
+                    Alert.alert(
+                      "Export Backup",
+                      "Choose where to save your backup.",
+                      [
+                        {
+                          text: "Download to Device",
+                          onPress: () => exportWith("download"),
+                        },
+                        {
+                          text: "Share",
+                          onPress: () => exportWith("share"),
+                        },
+                        {
+                          text: "Cancel",
+                          style: "cancel",
+                        },
+                      ],
+                    )
                   }
-                  onPress={submitReminder}
-                  disabled={busy}
-                  icon={<Check color="white" size={18} />}
+                  right={<ChevronRight color={palette.muted} />}
                 />
-              </View>
+                <SettingRow
+                  palette={palette}
+                  icon={<FileUp color={palette.brand} />}
+                  title="Import Backup"
+                  subtitle="Restore reminders on this phone"
+                  onPress={onImport}
+                  right={<ChevronRight color={palette.muted} />}
+                  last
+                />
+              </Card>
+              <Text
+                style={{
+                  color: palette.muted,
+                  fontSize: 12,
+                  fontWeight: "800",
+                  letterSpacing: 1,
+                  marginBottom: 10,
+                }}
+              >
+                ABOUT YOUR DATA
+              </Text>
+              <Card>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    gap: 12,
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <Heart color={palette.brand} size={23} />
+                  <View
+                    style={{
+                      flex: 1,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: palette.text,
+                        fontWeight: "800",
+                        fontSize: 15,
+                      }}
+                    >
+                      Your reminders belong to you.
+                    </Text>
+                    <Text
+                      style={{
+                        color: palette.muted,
+                        lineHeight: 20,
+                        marginTop: 7,
+                        fontSize: 13,
+                      }}
+                    >
+                      No login, no profile and no cloud account. Your reminders
+                      are stored locally on this device. Export a backup before
+                      changing phones or uninstalling the app. OS settings can
+                      still silence or delay notifications.
+                    </Text>
+                  </View>
+                </View>
+                <View
+                  style={{
+                    height: 1,
+                    backgroundColor: palette.border,
+                    marginVertical: 16,
+                  }}
+                />
+                <Text
+                  style={{
+                    color: palette.muted,
+                    fontSize: 12,
+                  }}
+                >
+                  Offline Reminder · Version 1.0.0
+                </Text>
+                <Pressable
+                  accessibilityRole="link"
+                  onPress={() => setShowPrivacy(true)}
+                  style={{
+                    paddingVertical: 12,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: palette.brand,
+                      fontWeight: "700",
+                    }}
+                  >
+                    Privacy Policy
+                  </Text>
+                </Pressable>
+              </Card>
             </ScrollView>
-          </KeyboardAvoidingView>
-        </SafeAreaView>
-      </Modal>
+          )}
 
-      <Modal
-        visible={Boolean(detail)}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setDetail(null)}
-      >
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: "#0008",
-            justifyContent: "flex-end",
-          }}
-        >
-          <Pressable onPress={() => setDetail(null)} style={{ flex: 1 }} />
           <View
             style={{
+              position: "absolute",
+              bottom: 0,
+              left: 0,
+              right: 0,
+              backgroundColor: palette.card,
+              borderTopWidth: 1,
+              borderTopColor: palette.border,
+              paddingTop: 10,
+              paddingBottom: Platform.OS === "ios" ? 12 : 10,
+              flexDirection: "row",
+              justifyContent: "space-around",
+            }}
+          >
+            {[
+              {
+                name: "Home",
+                icon: Home,
+              },
+              {
+                name: "Calendar",
+                icon: CalendarDays,
+              },
+              {
+                name: "Settings",
+                icon: SettingsIcon,
+              },
+            ].map((x) => {
+              const I = x.icon;
+              const active = tab === x.name;
+              return (
+                <Pressable
+                  key={x.name}
+                  onPress={() => setTab(x.name)}
+                  style={{
+                    alignItems: "center",
+                    gap: 4,
+                    minWidth: 70,
+                  }}
+                >
+                  <I size={21} color={active ? palette.brand : palette.muted} />
+                  <Text
+                    style={{
+                      color: active ? palette.brand : palette.muted,
+                      fontSize: 11,
+                      fontWeight: active ? "800" : "600",
+                    }}
+                  >
+                    {x.name}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
+        <Modal
+          visible={showForm}
+          animationType="slide"
+          presentationStyle="pageSheet"
+          onRequestClose={() => setShowForm(false)}
+        >
+          <SafeAreaView
+            style={{
+              flex: 1,
               backgroundColor: palette.bg,
-              borderTopLeftRadius: 28,
-              borderTopRightRadius: 28,
-              padding: 22,
-              paddingBottom: 34,
+            }}
+          >
+            <KeyboardAvoidingView
+              style={{
+                flex: 1,
+              }}
+              behavior={Platform.OS === "ios" ? "padding" : undefined}
+            >
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={{
+                  padding: 20,
+                  paddingBottom: 40,
+                }}
+              >
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginBottom: 16,
+                  }}
+                >
+                  <Pressable
+                    onPress={() => setShowForm(false)}
+                    style={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: 14,
+                      backgroundColor: palette.card,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <X color={palette.text} />
+                  </Pressable>
+                  <Text
+                    style={{
+                      color: palette.text,
+                      fontSize: 20,
+                      fontWeight: "800",
+                    }}
+                  >
+                    {editing ? "Edit reminder" : "New reminder"}
+                  </Text>
+                  <View
+                    style={{
+                      width: 42,
+                    }}
+                  />
+                </View>
+                <Text
+                  style={{
+                    color: palette.muted,
+                    marginBottom: 18,
+                  }}
+                >
+                  A title, a time, and you are all set.
+                </Text>
+                <Label>REMINDER TITLE *</Label>
+                <Field
+                  value={form.title}
+                  onChangeText={(v) =>
+                    setForm((p) => ({
+                      ...p,
+                      title: v,
+                    }))
+                  }
+                  placeholder="e.g. Mom's birthday"
+                />
+                <Label>DESCRIPTION (OPTIONAL)</Label>
+                <Field
+                  value={form.description}
+                  onChangeText={(v) =>
+                    setForm((p) => ({
+                      ...p,
+                      description: v,
+                    }))
+                  }
+                  placeholder="Add a note or a little context…"
+                  multiline
+                />
+                {(form.repeat === "none" || form.repeat === "yearly") && (
+                  <>
+                    <Label>DATE · YYYY-MM-DD</Label>
+                    <Field
+                      value={form.date}
+                      onChangeText={(v) =>
+                        setForm((p) => ({
+                          ...p,
+                          date: v,
+                        }))
+                      }
+                      placeholder="2026-12-24"
+                      keyboardType="numbers-and-punctuation"
+                    />
+                    <Text
+                      style={{
+                        color: palette.muted,
+                        fontSize: 11,
+                        marginTop: 5,
+                      }}
+                    >
+                      Use today or a future date.
+                    </Text>
+                    {NativeModules.ReminderNative && (
+                      <Pressable
+                        accessibilityRole="button"
+                        style={{
+                          paddingVertical: 12,
+                        }}
+                        onPress={async () => {
+                          try {
+                            const date =
+                              await NativeModules.ReminderNative.chooseDate(
+                                validDate(form.date) ? form.date : todayISO(),
+                              );
+                            if (date)
+                              setForm((p) => ({
+                                ...p,
+                                date,
+                              }));
+                          } catch (e) {
+                            Alert.alert("Choose date", e.message);
+                          }
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: palette.brand,
+                            fontWeight: "700",
+                          }}
+                        >
+                          Choose date
+                        </Text>
+                      </Pressable>
+                    )}
+                  </>
+                )}
+                {form.repeat === "weekly" && (
+                  <>
+                    <Label>WEEKDAYS</Label>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        flexWrap: "wrap",
+                        gap: 8,
+                      }}
+                    >
+                      {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
+                        (label, day) => (
+                          <Chip
+                            key={label}
+                            label={label}
+                            active={form.weekdays?.includes(day)}
+                            onPress={() =>
+                              setForm((p) => ({
+                                ...p,
+                                weekdays: p.weekdays?.includes(day)
+                                  ? p.weekdays.filter((d) => d !== day)
+                                  : [...(p.weekdays || []), day],
+                              }))
+                            }
+                          />
+                        ),
+                      )}
+                    </View>
+                  </>
+                )}
+                {form.repeat === "monthly" && (
+                  <>
+                    <Label>DAY OF MONTH · 1–31</Label>
+                    <Field
+                      value={String(form.monthDay || "")}
+                      onChangeText={(v) =>
+                        setForm((p) => ({
+                          ...p,
+                          monthDay: v,
+                        }))
+                      }
+                      keyboardType="number-pad"
+                      placeholder="20"
+                    />
+                    <Text
+                      style={{
+                        color: palette.muted,
+                        marginTop: 6,
+                      }}
+                    >
+                      Months without this day are skipped.
+                    </Text>
+                  </>
+                )}
+                <Label>TIME · 24-HOUR HH:MM</Label>
+                <Field
+                  value={form.time}
+                  onChangeText={(v) =>
+                    setForm((p) => ({
+                      ...p,
+                      time: v,
+                    }))
+                  }
+                  placeholder="09:30"
+                  keyboardType="numbers-and-punctuation"
+                />
+                {NativeModules.ReminderNative && (
+                  <Pressable
+                    accessibilityRole="button"
+                    style={{
+                      paddingVertical: 12,
+                    }}
+                    onPress={async () => {
+                      try {
+                        const time =
+                          await NativeModules.ReminderNative.chooseTime(
+                            /^([01]\d|2[0-3]):[0-5]\d$/.test(form.time)
+                              ? form.time
+                              : timeNow(),
+                          );
+                        if (time)
+                          setForm((p) => ({
+                            ...p,
+                            time,
+                          }));
+                      } catch (e) {
+                        Alert.alert("Choose time", e.message);
+                      }
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: palette.brand,
+                        fontWeight: "700",
+                      }}
+                    >
+                      Choose time
+                    </Text>
+                  </Pressable>
+                )}
+                <Label>REPEAT</Label>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    flexWrap: "wrap",
+                    gap: 8,
+                  }}
+                >
+                  {[
+                    {
+                      v: "none",
+                      l: "Never",
+                    },
+                    {
+                      v: "daily",
+                      l: "Daily",
+                    },
+                    {
+                      v: "weekly",
+                      l: "Weekly",
+                    },
+                    {
+                      v: "monthly",
+                      l: "Monthly",
+                    },
+                    {
+                      v: "yearly",
+                      l: "Yearly",
+                    },
+                  ].map((o) => (
+                    <Chip
+                      key={o.v}
+                      label={o.l}
+                      active={form.repeat === o.v}
+                      onPress={() =>
+                        setForm((p) => ({
+                          ...p,
+                          repeat: o.v,
+                          weekdays: p.weekdays || [
+                            new Date(`${p.date}T12:00:00`).getDay(),
+                          ],
+                          monthDay:
+                            p.monthDay ||
+                            new Date(`${p.date}T12:00:00`).getDate(),
+                        }))
+                      }
+                    />
+                  ))}
+                </View>
+                {form.repeat !== "none" && (
+                  <>
+                    <Label>REPEAT UNTIL (OPTIONAL) · YYYY-MM-DD</Label>
+                    <Field
+                      value={form.repeatUntil}
+                      onChangeText={(v) =>
+                        setForm((p) => ({
+                          ...p,
+                          repeatUntil: v,
+                        }))
+                      }
+                      placeholder="Leave empty to repeat indefinitely"
+                    />
+                  </>
+                )}
+                <View
+                  style={{
+                    marginTop: 26,
+                  }}
+                >
+                  <Btn
+                    title={
+                      busy
+                        ? "Saving…"
+                        : editing
+                          ? "Save changes"
+                          : "Save reminder"
+                    }
+                    onPress={submitReminder}
+                    disabled={busy}
+                    icon={<Check color="white" size={18} />}
+                  />
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </SafeAreaView>
+        </Modal>
+
+        <Modal
+          visible={showSounds}
+          animationType="slide"
+          onRequestClose={() => {
+            stopPreview();
+            setShowSounds(false);
+            setPreviewing(null);
+          }}
+        >
+          <SafeAreaView
+            style={{
+              flex: 1,
+              backgroundColor: palette.bg,
+              padding: 20,
             }}
           >
             <View
               style={{
                 flexDirection: "row",
+                alignItems: "center",
                 justifyContent: "space-between",
-                alignItems: "flex-start",
+                marginBottom: 20,
               }}
             >
-              <View style={{ flex: 1, marginRight: 12 }}>
-                <Text
-                  style={{
-                    color: palette.muted,
-                    fontSize: 12,
-                    fontWeight: "700",
-                  }}
-                >
-                  REMINDER DETAILS
-                </Text>
-                <Text
-                  style={{
-                    color: palette.text,
-                    fontSize: 24,
-                    fontWeight: "800",
-                    marginTop: 7,
-                  }}
-                >
-                  {detail?.title}
-                </Text>
-              </View>
-              <Pressable onPress={() => setDetail(null)}>
+              <Text
+                style={{
+                  color: palette.text,
+                  fontSize: 24,
+                  fontWeight: "800",
+                }}
+              >
+                Reminder sounds
+              </Text>
+              <Pressable
+                accessibilityLabel="Close sounds"
+                onPress={() => {
+                  stopPreview();
+                  setShowSounds(false);
+                  setPreviewing(null);
+                }}
+              >
                 <X color={palette.text} />
               </Pressable>
             </View>
+            <Text
+              style={{
+                color: palette.muted,
+                lineHeight: 20,
+                marginBottom: 18,
+              }}
+            >
+              Choose an audio file using the system picker. A private copy stays
+              on this device. No broad storage permission is needed.
+            </Text>
             <View
               style={{
-                flexDirection: "row",
-                gap: 10,
-                marginTop: 20,
-                marginBottom: 16,
+                alignSelf: "flex-start",
+                marginBottom: 12,
+              }}
+            >
+              <Btn
+                title="Import Sound"
+                secondary
+                onPress={async () => {
+                  try {
+                    const sound = await importSound();
+                    if (sound) setSounds(await loadSounds());
+                  } catch (e) {
+                    Alert.alert(
+                      "Audio file access",
+                      e.message +
+                        " Choose an accessible audio file, or check the file provider permissions in system Settings.",
+                      [
+                        {
+                          text: "Cancel",
+                          style: "cancel",
+                        },
+                        {
+                          text: "Choose Audio File",
+                          onPress: async () => {
+                            try {
+                              await importSound();
+                              setSounds(await loadSounds());
+                            } catch (e) {
+                              Alert.alert("Import failed", e.message);
+                            }
+                          },
+                        },
+                        {
+                          text: "Settings",
+                          onPress: () => Linking.openSettings(),
+                        },
+                      ],
+                    );
+                  }
+                }}
+              />
+            </View>
+            <FlatList
+              data={[...BUILT_IN_SOUNDS, ...sounds]}
+              keyExtractor={(s) => s.id || "default"}
+              renderItem={({ item, index }) => (
+                <View>
+                  {(index === 0 || index === BUILT_IN_SOUNDS.length) && (
+                    <Label>
+                      {index === 0 ? "BUILT-IN SOUNDS" : "IMPORTED SOUNDS"}
+                    </Label>
+                  )}
+                  <Card
+                    style={{
+                      marginBottom: 8,
+                      padding: 12,
+                    }}
+                  >
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 12,
+                      }}
+                    >
+                      <Pressable
+                        accessibilityLabel={
+                          previewing === item.name
+                            ? "Stop preview"
+                            : `Preview ${item.name}`
+                        }
+                        onPress={() => {
+                          stopPreview();
+                          if (previewing === item.name) {
+                            setPreviewing(null);
+                            return;
+                          }
+                          setPreviewing(item.name);
+                          previewSound(item).catch((e) => {
+                            setPreviewing(null);
+                            Alert.alert("Cannot play sound", e.message);
+                          });
+                        }}
+                        style={{
+                          padding: 10,
+                          borderRadius: 14,
+                          backgroundColor: palette.soft,
+                        }}
+                      >
+                        {previewing === item.name ? (
+                          <Square color={palette.brand} size={22} />
+                        ) : (
+                          <Volume2 color={palette.brand} size={22} />
+                        )}
+                      </Pressable>
+                      <Pressable
+                        style={{
+                          flex: 1,
+                        }}
+                        onPress={() => {
+                          stopPreview();
+                          setPreviewing(null);
+                          updateSettings({
+                            defaultSoundId: item.id,
+                          }).catch((e) => Alert.alert("Settings", e.message));
+                        }}
+                      >
+                        <Text
+                          numberOfLines={1}
+                          style={{
+                            color: palette.text,
+                            fontWeight: "700",
+                          }}
+                        >
+                          {item.name}
+                        </Text>
+                        <View
+                          accessibilityLabel="Decorative audio waveform"
+                          style={{
+                            flexDirection: "row",
+                            alignItems: "center",
+                            gap: 3,
+                            height: 22,
+                            marginTop: 5,
+                          }}
+                        >
+                          {[
+                            5, 12, 8, 18, 10, 20, 7, 15, 9, 17, 6, 12, 8, 4,
+                          ].map((h, i) => (
+                            <View
+                              key={i}
+                              style={{
+                                width: 3,
+                                height: h,
+                                borderRadius: 2,
+                                backgroundColor:
+                                  previewing === item.name
+                                    ? palette.brand
+                                    : palette.muted,
+                                opacity: 0.6,
+                              }}
+                            />
+                          ))}
+                        </View>
+                      </Pressable>
+                      {(settings.defaultSoundId || null) === item.id && (
+                        <CheckCircle2 color={palette.brand} size={22} />
+                      )}
+                      {!item.builtIn && (
+                        <Pressable
+                          accessibilityLabel={`Remove ${item.name}`}
+                          onPress={() =>
+                            Alert.alert(
+                              "Remove sound?",
+                              "1 imported sound will be deleted. If selected, all reminders will use Reminder.",
+                              [
+                                {
+                                  text: "Cancel",
+                                  style: "cancel",
+                                },
+                                {
+                                  text: "Remove",
+                                  style: "destructive",
+                                  onPress: async () => {
+                                    try {
+                                      stopPreview();
+                                      if (settings.defaultSoundId === item.id)
+                                        await updateSettings({
+                                          defaultSoundId: null,
+                                        });
+                                      await removeSound(item);
+                                      setSounds(await loadSounds());
+                                    } catch (e) {
+                                      Alert.alert(
+                                        "Cannot remove sound",
+                                        e.message,
+                                      );
+                                    }
+                                  },
+                                },
+                              ],
+                            )
+                          }
+                        >
+                          <Trash2 color={C.red} size={19} />
+                        </Pressable>
+                      )}
+                    </View>
+                  </Card>
+                </View>
+              )}
+              ListFooterComponent={
+                <Text
+                  style={{
+                    color: palette.muted,
+                    marginTop: 8,
+                  }}
+                >
+                  One common sound for every reminder. Tap a speaker for a
+                  15-second preview; tap a name to select.
+                </Text>
+              }
+            />
+          </SafeAreaView>
+        </Modal>
+        <Modal
+          visible={showPrivacy}
+          animationType="slide"
+          onRequestClose={() => setShowPrivacy(false)}
+        >
+          <SafeAreaView
+            style={{
+              flex: 1,
+              backgroundColor: palette.bg,
+            }}
+          >
+            <ScrollView
+              contentContainerStyle={{
+                padding: 20,
+              }}
+            >
+              <Btn
+                secondary
+                title="Close"
+                onPress={() => setShowPrivacy(false)}
+              />
+              <Text
+                style={{
+                  color: palette.text,
+                  fontSize: 26,
+                  fontWeight: "800",
+                  marginVertical: 20,
+                }}
+              >
+                Privacy Policy
+              </Text>
+              <Text
+                style={{
+                  color: palette.text,
+                  lineHeight: 24,
+                }}
+              >
+                Offline Reminder stores your reminders, preferences and imported
+                audio files locally on your device. The app does not require an
+                account and does not send this data to a backend, analytics or
+                advertising service. Notifications are scheduled through your
+                operating system. Audio files are accessed only when you choose
+                them using the system file picker, and a private copy is saved
+                in app storage. Exporting a backup shares the reminder data with
+                the destination you select; imported audio is not included.
+                Android device backup may include app data according to your
+                system backup settings. You can delete reminders and imported
+                sounds in the app, or clear all app data in system settings.
+                Uninstalling the app removes its local private data. Keep your
+                backups safe: they can contain personal information. This policy
+                applies to version 1.0.0. Updated October 13, 2026.
+              </Text>
+            </ScrollView>
+          </SafeAreaView>
+        </Modal>
+        <Modal
+          visible={Boolean(detail)}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setDetail(null)}
+        >
+          <View
+            style={{
+              flex: 1,
+              backgroundColor: "#0008",
+              justifyContent: "flex-end",
+            }}
+          >
+            <Pressable
+              onPress={() => setDetail(null)}
+              style={{
+                flex: 1,
+              }}
+            />
+            <View
+              style={{
+                backgroundColor: palette.bg,
+                borderTopLeftRadius: 28,
+                borderTopRightRadius: 28,
+                padding: 22,
+                paddingBottom: 34,
               }}
             >
               <View
                 style={{
-                  flex: 1,
-                  backgroundColor: palette.card,
-                  borderRadius: 15,
-                  padding: 13,
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
                 }}
               >
-                <CalendarDays color={palette.brand} size={20} />
-                <Text
+                <View
                   style={{
-                    color: palette.text,
-                    fontWeight: "700",
-                    marginTop: 8,
+                    flex: 1,
+                    marginRight: 12,
                   }}
                 >
-                  {detail ? formatDate(detail.date) : ""}
-                </Text>
+                  <Text
+                    style={{
+                      color: palette.muted,
+                      fontSize: 12,
+                      fontWeight: "700",
+                    }}
+                  >
+                    REMINDER DETAILS
+                  </Text>
+                  <Text
+                    style={{
+                      color: palette.text,
+                      fontSize: 24,
+                      fontWeight: "800",
+                      marginTop: 7,
+                    }}
+                  >
+                    {detail?.title}
+                  </Text>
+                </View>
+                <Pressable onPress={() => setDetail(null)}>
+                  <X color={palette.text} />
+                </Pressable>
               </View>
               <View
                 style={{
-                  flex: 1,
-                  backgroundColor: palette.card,
-                  borderRadius: 15,
-                  padding: 13,
+                  flexDirection: "row",
+                  gap: 10,
+                  marginTop: 20,
+                  marginBottom: 16,
                 }}
               >
-                <Clock3 color={palette.brand} size={20} />
-                <Text
+                <View
                   style={{
-                    color: palette.text,
-                    fontWeight: "700",
-                    marginTop: 8,
+                    flex: 1,
+                    backgroundColor: palette.card,
+                    borderRadius: 15,
+                    padding: 13,
                   }}
                 >
-                  {detail ? formatTime(detail.time) : ""}
-                </Text>
+                  <CalendarDays color={palette.brand} size={20} />
+                  <Text
+                    style={{
+                      color: palette.text,
+                      fontWeight: "700",
+                      marginTop: 8,
+                    }}
+                  >
+                    {detail ? formatDate(detail.date) : ""}
+                  </Text>
+                </View>
+                <View
+                  style={{
+                    flex: 1,
+                    backgroundColor: palette.card,
+                    borderRadius: 15,
+                    padding: 13,
+                  }}
+                >
+                  <Clock3 color={palette.brand} size={20} />
+                  <Text
+                    style={{
+                      color: palette.text,
+                      fontWeight: "700",
+                      marginTop: 8,
+                    }}
+                  >
+                    {detail ? formatTime(detail.time) : ""}
+                  </Text>
+                </View>
               </View>
-            </View>
-            {detail?.description ? (
-              <Text
+              {detail?.description ? (
+                <Text
+                  style={{
+                    color: palette.muted,
+                    lineHeight: 21,
+                    marginBottom: 18,
+                  }}
+                >
+                  {detail.description}
+                </Text>
+              ) : null}
+              {detail?.repeat && detail.repeat !== "none" ? (
+                <Text
+                  style={{
+                    color: palette.muted,
+                    marginBottom: 16,
+                  }}
+                >
+                  Repeats {detail.repeat}
+                  {detail.repeatUntil ? ` until ${detail.repeatUntil}` : ""}
+                </Text>
+              ) : null}
+              {!detail?.completed && (
+                <View
+                  style={{
+                    marginBottom: 10,
+                  }}
+                >
+                  <Btn
+                    title="Mark as complete"
+                    onPress={() => markComplete(detail.id)}
+                    icon={<CheckCircle2 color="white" size={18} />}
+                  />
+                </View>
+              )}
+              <View
                 style={{
-                  color: palette.muted,
-                  lineHeight: 21,
-                  marginBottom: 18,
+                  flexDirection: "row",
+                  gap: 10,
                 }}
               >
-                {detail.description}
-              </Text>
-            ) : null}
-            {detail?.repeat && detail.repeat !== "none" ? (
-              <Text style={{ color: palette.muted, marginBottom: 16 }}>
-                Repeats {detail.repeat}
-                {detail.repeatUntil ? ` until ${detail.repeatUntil}` : ""}
-              </Text>
-            ) : null}
-            {!detail?.completed && (
-              <View style={{ marginBottom: 10 }}>
-                <Btn
-                  title="Mark as complete"
-                  onPress={() =>
-                    settings.confirmBeforeClear
-                      ? Alert.alert(
-                          "Mark complete?",
-                          "This will complete the reminder in the app.",
-                          [
-                            { text: "Keep it", style: "cancel" },
-                            {
-                              text: "Complete",
-                              onPress: () => markComplete(detail.id),
-                            },
-                          ],
-                        )
-                      : markComplete(detail.id)
-                  }
-                  icon={<CheckCircle2 color="white" size={18} />}
-                />
-              </View>
-            )}
-            <View style={{ flexDirection: "row", gap: 10 }}>
-              <View style={{ flex: 1 }}>
-                <Btn title="Edit" secondary onPress={() => openEdit(detail)} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Btn
-                  title="Delete"
-                  danger
-                  onPress={() => deleteReminder(detail)}
-                  icon={<Trash2 color="#B91C1C" size={17} />}
-                />
+                <View
+                  style={{
+                    flex: 1,
+                  }}
+                >
+                  <Btn
+                    title="Edit"
+                    secondary
+                    onPress={() => openEdit(detail)}
+                  />
+                </View>
+                <View
+                  style={{
+                    flex: 1,
+                  }}
+                >
+                  <Btn
+                    title="Delete"
+                    danger
+                    onPress={() => deleteReminder(detail)}
+                    icon={<Trash2 color="#B91C1C" size={17} />}
+                  />
+                </View>
               </View>
             </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
+      </PaletteContext.Provider>
     </SafeAreaView>
   );
 }
-
 function SettingRow({
   palette,
   icon,
@@ -1606,8 +2695,18 @@ function SettingRow({
       >
         {icon}
       </View>
-      <View style={{ flex: 1 }}>
-        <Text style={{ color: palette.text, fontWeight: "700", fontSize: 14 }}>
+      <View
+        style={{
+          flex: 1,
+        }}
+      >
+        <Text
+          style={{
+            color: palette.text,
+            fontWeight: "700",
+            fontSize: 14,
+          }}
+        >
           {title}
         </Text>
         {subtitle ? (

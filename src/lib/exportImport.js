@@ -1,56 +1,130 @@
-import * as FileSystem from 'expo-file-system/legacy';
-import * as Sharing from 'expo-sharing';
-import * as DocumentPicker from 'expo-document-picker';
-
-function csvCell(value) {
-  const s = String(value ?? '');
-  return `"${s.replace(/"/g, '""')}"`;
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
+import * as DocumentPicker from "expo-document-picker";
+import { Platform } from "react-native";
+import { validDate } from "./recurrence";
+export function validateBackup(parsed) {
+  if (
+    !parsed ||
+    ![1, 2].includes(parsed.schemaVersion) ||
+    !["Offline Reminder", "Reminder Pro"].includes(parsed.app) ||
+    !Array.isArray(parsed.reminders)
+  )
+    throw new Error(
+      "Unsupported backup. Choose an Offline Reminder JSON backup (version 1 or 2).",
+    );
+  if (parsed.reminders.length > 100000)
+    throw new Error("This backup exceeds the supported import size.");
+  const ids = new Set();
+  return parsed.reminders.map((r, i) => {
+    if (
+      !r ||
+      typeof r.title !== "string" ||
+      !r.title.trim() ||
+      !validDate(r.date) ||
+      !/^([01]\d|2[0-3]):[0-5]\d$/.test(r.time || "") ||
+      !["none", "daily", "weekly", "monthly", "yearly"].includes(
+        r.repeat || "none",
+      ) ||
+      (r.description != null && typeof r.description !== "string") ||
+      (r.completed != null && typeof r.completed !== "boolean") ||
+      (r.id != null && typeof r.id !== "string") ||
+      (r.repeatUntil &&
+        (!validDate(r.repeatUntil) || r.repeatUntil < r.date)) ||
+      (r.weekdays != null &&
+        (!Array.isArray(r.weekdays) ||
+          !r.weekdays.length ||
+          r.weekdays.some((d) => !Number.isInteger(d) || d < 0 || d > 6))) ||
+      (r.monthDay != null &&
+        (!Number.isInteger(r.monthDay) || r.monthDay < 1 || r.monthDay > 31)) ||
+      (r.completedDates != null &&
+        (!Array.isArray(r.completedDates) ||
+          r.completedDates.some((d) => !validDate(d))))
+    )
+      throw new Error(
+        `Reminder ${i + 1} is invalid. No reminders were imported.`,
+      );
+    if (r.id && ids.has(r.id))
+      throw new Error(
+        "This backup contains duplicate IDs. No reminders were imported.",
+      );
+    ids.add(r.id);
+    return {
+      id: r.id,
+      title: r.title.trim(),
+      description: r.description || "",
+      date: r.date,
+      time: r.time,
+      repeat: r.repeat || "none",
+      repeatUntil: r.repeatUntil || "",
+      weekdays: r.weekdays,
+      monthDay: r.monthDay,
+      completed: !!r.completed,
+      completedDates: r.completedDates || [],
+      completedAt: r.completedAt,
+      createdAt: r.createdAt || new Date().toISOString(),
+      soundId: typeof r.soundId === "string" ? r.soundId : null,
+    };
+  });
 }
-export async function exportJSON(reminders) {
-  const payload = { app: 'Reminder Pro', schemaVersion: 1, exportedAt: new Date().toISOString(), reminders };
-  const uri = `${FileSystem.cacheDirectory}reminder-pro-backup-${Date.now()}.json`;
+export async function exportJSON(reminders, destination = "share") {
+  const payload = {
+    app: "Offline Reminder",
+    schemaVersion: 2,
+    exportedAt: new Date().toISOString(),
+    reminders: reminders.map(({ notificationId, soundUri, ...r }) => r),
+  };
+  const uri = `${FileSystem.cacheDirectory}offline-reminder-backup-${Date.now()}.json`;
   await FileSystem.writeAsStringAsync(uri, JSON.stringify(payload, null, 2));
-  if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'application/json', dialogTitle: 'Export reminders' });
-  return uri;
-}
-export async function exportCSV(reminders) {
-  const headers = ['title','description','date','time','repeat','repeatUntil','completed','createdAt'];
-  const rows = reminders.map(r => headers.map(h => csvCell(r[h])).join(','));
-  const content = [headers.join(','), ...rows].join('\r\n');
-  const uri = `${FileSystem.cacheDirectory}reminder-pro-${Date.now()}.csv`;
-  await FileSystem.writeAsStringAsync(uri, content, { encoding: FileSystem.EncodingType.UTF8 });
-  if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'text/csv', dialogTitle: 'Export reminders as CSV' });
+  if (destination === "download") {
+    if (Platform.OS !== "android")
+      throw new Error("Use Share and Save to Files on this device.");
+    const access =
+      await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+    if (!access.granted) return null;
+    const saved = await FileSystem.StorageAccessFramework.createFileAsync(
+      access.directoryUri,
+      uri.split("/").pop(),
+      "application/json",
+    );
+    await FileSystem.writeAsStringAsync(
+      saved,
+      JSON.stringify(payload, null, 2),
+    );
+    return saved;
+  }
+  if (!(await Sharing.isAvailableAsync()))
+    throw new Error("Sharing is unavailable on this device.");
+  await Sharing.shareAsync(uri, {
+    mimeType: "application/json",
+    dialogTitle: "Export Backup",
+  });
   return uri;
 }
 export async function importReminders() {
-  const result = await DocumentPicker.getDocumentAsync({ type: ['application/json', 'text/csv', 'text/comma-separated-values'], copyToCacheDirectory: true, multiple: false });
+  const result = await DocumentPicker.getDocumentAsync({
+    type: ["application/json", "text/plain"],
+    copyToCacheDirectory: true,
+    multiple: false,
+  });
   if (result.canceled || !result.assets?.[0]) return null;
   const asset = result.assets[0];
-  const raw = await FileSystem.readAsStringAsync(asset.uri);
-  if (asset.name?.toLowerCase().endsWith('.csv') || raw.trim().startsWith('"title"') || raw.trim().startsWith('title,')) {
-    const lines = raw.split(/\r?\n/).filter(Boolean);
-    if (lines.length < 2) throw new Error('The CSV file has no reminder rows.');
-    const parseRow = line => {
-      const cells = []; let value = ''; let quoted = false;
-      for (let i = 0; i < line.length; i++) {
-        const c = line[i];
-        if (c === '"' && quoted && line[i + 1] === '"') { value += '"'; i++; }
-        else if (c === '"') quoted = !quoted;
-        else if (c === ',' && !quoted) { cells.push(value); value = ''; }
-        else value += c;
-      }
-      cells.push(value); return cells;
-    };
-    const headers = parseRow(lines[0]);
-    return lines.slice(1).map(line => {
-      const cells = parseRow(line); const obj = {};
-      headers.forEach((h, i) => { obj[h] = cells[i] ?? ''; });
-      obj.completed = obj.completed === true || obj.completed === 'true';
-      return obj;
-    });
+  try {
+    if (asset.size > 50 * 1024 * 1024)
+      throw new Error("Choose a backup smaller than 50 MB.");
+    const raw = await FileSystem.readAsStringAsync(asset.uri);
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(
+        "This file is not valid JSON. No reminders were imported.",
+      );
+    }
+    return validateBackup(parsed);
+  } finally {
+    await FileSystem.deleteAsync(asset.uri, { idempotent: true }).catch(
+      () => {},
+    );
   }
-  const parsed = JSON.parse(raw);
-  const reminders = Array.isArray(parsed) ? parsed : parsed.reminders;
-  if (!Array.isArray(reminders)) throw new Error('This file is not a Reminder Pro backup.');
-  return reminders;
 }
