@@ -10,3 +10,7 @@ ios/
 artifacts/*.bundle
 artifacts/*.apk
 validation-config.json
+
+# Native scheduler sources are required by the Expo plugin.
+!native/android/
+!native/android/**

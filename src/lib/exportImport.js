@@ -15,7 +15,7 @@ export function validateBackup(parsed) {
     );
   if (parsed.reminders.length > 100000)
     throw new Error("This backup exceeds the supported import size.");
-  const ids = new Set();
+
   return parsed.reminders.map((r, i) => {
     if (
       !r ||
@@ -44,11 +44,7 @@ export function validateBackup(parsed) {
       throw new Error(
         `Reminder ${i + 1} is invalid. No reminders were imported.`,
       );
-    if (r.id && ids.has(r.id))
-      throw new Error(
-        "This backup contains duplicate IDs. No reminders were imported.",
-      );
-    ids.add(r.id);
+
     return {
       id: r.id,
       title: r.title.trim(),
@@ -68,6 +64,8 @@ export function validateBackup(parsed) {
   });
 }
 export async function exportJSON(reminders, destination = "share") {
+  if (!reminders.length) throw new Error("No reminders available to export.");
+  if (!reminders.length) throw new Error("No reminders available to export.");
   const payload = {
     app: "Offline Reminder",
     schemaVersion: 2,
@@ -99,7 +97,7 @@ export async function exportJSON(reminders, destination = "share") {
     mimeType: "application/json",
     dialogTitle: "Export Backup",
   });
-  return uri;
+  return null;
 }
 export async function importReminders() {
   const result = await DocumentPicker.getDocumentAsync({
@@ -127,4 +125,19 @@ export async function importReminders() {
       () => {},
     );
   }
+}
+
+export function newReminders(reminders, imported) {
+      const fingerprint = (r) => JSON.stringify([r.title.trim(), r.description || "", r.date, r.time,
+        r.repeat || "none", r.repeat === "weekly" ? [...(r.weekdays || [new Date(r.date + "T12:00:00").getDay()])].sort() : null,
+        r.repeat === "monthly" ? (r.monthDay || Number(r.date.slice(8))) : null, r.repeatUntil || ""]);
+      const keys = new Set(reminders.map((r) => r.id));
+      const fingerprints = new Set(reminders.map(fingerprint));
+      return imported.filter((r) => {
+        const key = fingerprint(r);
+        if ((r.id && keys.has(r.id)) || fingerprints.has(key)) return false;
+        if (r.id) keys.add(r.id);
+        fingerprints.add(key);
+        return true;
+      });
 }

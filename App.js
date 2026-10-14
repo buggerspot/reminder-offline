@@ -7,11 +7,11 @@ import React, {
   useDeferredValue,
 } from "react";
 import {
-  Alert,
   Appearance,
   AppState,
   FlatList,
   Linking,
+  LayoutAnimation,
   NativeModules,
   KeyboardAvoidingView,
   Modal,
@@ -21,7 +21,6 @@ import {
   Text,
   TextInput,
   View,
-  useColorScheme,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
@@ -63,7 +62,8 @@ import {
   loadSettings,
   saveSettings,
 } from "./src/lib/storage";
-import { exportJSON, importReminders } from "./src/lib/exportImport";
+import { deleteSelected } from "./src/lib/selection";
+import { exportJSON, importReminders, newReminders } from "./src/lib/exportImport";
 import {
   occursOn,
   nextOccurrence,
@@ -82,6 +82,8 @@ import {
   stopPreview,
 } from "./src/lib/sounds";
 import {
+  AppDialog,
+  SelectionToolbar,
   PaletteContext,
   Card,
   Btn,
@@ -120,7 +122,7 @@ const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 export default function App() {
   const [reminders, setReminders] = useState([]);
   const [settings, setSettings] = useState({
-    theme: "system",
+    theme: "light",
     soundEnabled: true,
     keepReminderAfterDismiss: true,
     confirmBeforeClear: false,
@@ -174,10 +176,19 @@ export default function App() {
   const migratedNotifications = useRef(false);
   const deferredSearch = useDeferredValue(search);
   const [busy, setBusy] = useState(false);
-  const systemScheme = useColorScheme();
-  const isDark =
-    settings.theme === "dark" ||
-    (settings.theme === "system" && systemScheme === "dark");
+  const [dialog, setDialog] = useState(null);
+  const dialogQueue = useRef([]);
+  const dialogOpen = useRef(false);
+  const Alert = useMemo(() => ({ alert: (title, message, buttons) => {
+    const next = { title, message, buttons };
+    if (dialogOpen.current) dialogQueue.current.push(next);
+    else { dialogOpen.current = true; setDialog(next); }
+  } }), []);
+  const closeDialog = () => { const next = dialogQueue.current.shift() || null; dialogOpen.current = !!next; setDialog(next); };
+  const [selectionMode, setSelectionMode] = useState(false);
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  useEffect(() => { setSelectedIds([]); setSelectionMode(false); }, [tab, filter, selectedDate, search]);
+  const isDark = settings.theme === "dark";
   const palette = useMemo(
     () =>
       isDark
@@ -209,7 +220,7 @@ export default function App() {
   );
   useEffect(() => {
     Appearance.setColorScheme(
-      settings.theme === "system" ? "unspecified" : settings.theme,
+      settings.theme,
     );
   }, [settings.theme]);
   useEffect(() => {
@@ -359,6 +370,7 @@ export default function App() {
         setDetail(null);
         return;
       }
+      await NativeModules.ReminderNative?.clearNotification?.(id);
       let updated;
       if (current.repeat && current.repeat !== "none") {
         const occurrenceDate = detail?.id === id ? detail.date : todayISO();
@@ -433,6 +445,7 @@ export default function App() {
       ...settingsRef.current,
       ...patch,
     };
+    if ("theme" in patch) LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     settingsRef.current = next;
     setSettings(next);
     if ("soundEnabled" in patch)
@@ -596,6 +609,7 @@ export default function App() {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
+            await NativeModules.ReminderNative?.clearNotification?.(r.id);
             await cancelReminderNotification(r.notificationId);
             const next = reminders.filter((x) => x.id !== r.id);
             await saveReminders(next);
@@ -605,10 +619,12 @@ export default function App() {
         },
       ],
     );
-  const toggleSelection = (id) =>
+  const toggleSelection = (id) => {
+    setSelectionMode(true);
     setSelectedIds((ids) =>
       ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
     );
+  };
   const deleteMany = (ids) =>
     Alert.alert(
       "Delete reminders?",
@@ -624,12 +640,15 @@ export default function App() {
           onPress: async () => {
             try {
               const deletedIds = new Set(ids);
-              const next = reminders.filter((r) => !deletedIds.has(r.id));
-              for (const r of reminders.filter((r) => deletedIds.has(r.id)))
+              const next = deleteSelected(reminderRef.current, deletedIds, tab === "Home" ? filter : "Calendar");
+              for (const r of reminders.filter((r) => deletedIds.has(r.id))) {
+                await NativeModules.ReminderNative?.clearNotification?.(r.id);
                 await cancelReminderNotification(r.notificationId);
+              }
               await saveReminders(next);
               setReminders(next);
               setSelectedIds([]);
+              setSelectionMode(false);
             } catch (e) {
               Alert.alert("Delete failed", e.message);
             }
@@ -637,16 +656,10 @@ export default function App() {
         },
       ],
     );
-  const visible = useMemo(() => {
+  const tabRows = useMemo(() => {
     const now = new Date(clock);
-    const query = deferredSearch.trim().toLowerCase();
     return reminders
       .filter((r) => {
-        if (
-          query &&
-          !(r.title + " " + (r.description || "")).toLowerCase().includes(query)
-        )
-          return false;
         if (filter === "Completed")
           return r.completed || (r.completedDates || []).length > 0;
         if (filter === "Missed") return isMissed(r, now);
@@ -674,7 +687,11 @@ export default function App() {
       .sort((a, b) =>
         (a.date + " " + a.time).localeCompare(b.date + " " + b.time),
       );
-  }, [reminders, filter, deferredSearch, clock]);
+  }, [reminders, filter, clock]);
+  const visible = useMemo(() => {
+    const query = deferredSearch.trim().toLowerCase();
+    return query ? tabRows.filter((r) => (r.title + " " + (r.description || "")).toLowerCase().includes(query)) : tabRows;
+  }, [tabRows, deferredSearch]);
   const calendarRows = useMemo(
     () =>
       reminders
@@ -730,38 +747,7 @@ export default function App() {
     try {
       const imported = await importReminders();
       if (!imported) return;
-      const keys = new Set(reminders.map((r) => r.id));
-      const fingerprints = new Set(
-        reminders.map((r) =>
-          JSON.stringify([
-            r.title,
-            r.description,
-            r.date,
-            r.time,
-            r.repeat,
-            r.weekdays,
-            r.monthDay,
-            r.repeatUntil,
-          ]),
-        ),
-      );
-      const valid = imported
-        .filter((r) => {
-          const fingerprint = JSON.stringify([
-            r.title,
-            r.description,
-            r.date,
-            r.time,
-            r.repeat,
-            r.weekdays,
-            r.monthDay,
-            r.repeatUntil,
-          ]);
-          if (keys.has(r.id) || fingerprints.has(fingerprint)) return false;
-          keys.add(r.id);
-          fingerprints.add(fingerprint);
-          return true;
-        })
+      const valid = newReminders(reminderRef.current, imported)
         .map((r) => ({
           ...r,
           id: r.id || makeId(),
@@ -769,13 +755,15 @@ export default function App() {
           soundId: sounds.some((s) => s.id === r.soundId) ? r.soundId : null,
           soundUri: sounds.find((s) => s.id === r.soundId)?.uri || null,
         }));
+      const skipped = imported.length - valid.length;
+      if (!valid.length) return Alert.alert("Nothing new to import", imported.length ? "All reminders are already imported. Nothing new to import." : "No reminders available to import.");
       const combined = [...reminders, ...valid];
       if (Platform.OS !== "android")
         for (const r of valid)
           r.notificationId = await scheduleReminder(r, settings.soundEnabled);
       await saveReminders(combined);
       setReminders(combined);
-      Alert.alert("Import complete", `${valid.length} reminders imported.`);
+      Alert.alert("Import complete", `${valid.length} reminders imported. ${skipped} skipped as duplicates.`);
     } catch (e) {
       Alert.alert(
         "Import failed",
@@ -784,12 +772,13 @@ export default function App() {
     }
   };
   const exportWith = async (type) => {
+    if (!reminders.length) return Alert.alert("Nothing to export", "No reminders available to export.");
     try {
       const result = await exportJSON(reminders, type);
-      if (!result) return;
+      if (!result || type !== "download") return;
       Alert.alert(
         "Backup exported",
-        "Your JSON backup is ready. Imported sound files stay on this device; import them again on a new phone.",
+        "Your JSON backup was saved successfully. Imported sound files stay on this device; import them again on a new phone.",
       );
     } catch (e) {
       Alert.alert("Export failed", e.message || "Could not export reminders.");
@@ -900,45 +889,6 @@ export default function App() {
             }}
           />
         )}
-        {(tab === "Home" || tab === "Calendar") && reminders.length > 0 && (
-          <View
-            style={{
-              flexDirection: "row",
-              gap: 10,
-              paddingHorizontal: 20,
-              paddingVertical: 8,
-            }}
-          >
-            <View
-              style={{
-                flex: 1,
-              }}
-            >
-              <Btn
-                secondary
-                title={
-                  selectedIds.length
-                    ? `Delete selected (${selectedIds.length})`
-                    : "Delete all"
-                }
-                onPress={() =>
-                  deleteMany(
-                    selectedIds.length
-                      ? selectedIds
-                      : reminders.map((r) => r.id),
-                  )
-                }
-              />
-            </View>
-            {!!selectedIds.length && (
-              <Btn
-                secondary
-                title="Cancel"
-                onPress={() => setSelectedIds([])}
-              />
-            )}
-          </View>
-        )}
         <View
           style={{
             flex: 1,
@@ -951,10 +901,11 @@ export default function App() {
               renderItem={({ item }) => (
                 <ReminderRow
                   item={item}
-                  selected={selectedIds.includes(item.id)}
+                  selected={selectedSet.has(item.id)}
+                  selectionMode={selectionMode}
                   onLongPress={() => toggleSelection(item.id)}
                   onOpen={(r) =>
-                    selectedIds.length ? toggleSelection(r.id) : openReminder(r)
+                    selectionMode ? toggleSelection(r.id) : openReminder(r)
                   }
                 />
               )}
@@ -968,6 +919,11 @@ export default function App() {
               }}
               ListHeaderComponent={
                 <View>
+                  {selectionMode && <SelectionToolbar count={selectedIds.length} total={tabRows.length}
+                    onSelectAll={() => setSelectedIds(selectedIds.length === tabRows.length ? [] : tabRows.map((r) => r.id))}
+                    onCancel={() => { setSelectionMode(false); setSelectedIds([]); }}
+                    onDelete={() => deleteMany(tabRows.filter((r) => selectedSet.has(r.id)).map((r) => r.id))} />}
+
                   <View
                     style={{
                       flexDirection: "row",
@@ -1238,7 +1194,7 @@ export default function App() {
                         marginTop: 12,
                       }}
                     >
-                      A little room to breathe
+                      {reminders.length ? `No ${filter.toLowerCase()} reminders.` : "A little room to breathe"}
                     </Text>
                     <Text
                       style={{
@@ -1248,8 +1204,7 @@ export default function App() {
                         lineHeight: 20,
                       }}
                     >
-                      No reminders here yet. Add one now and let your mind focus
-                      on what matters.
+                      {reminders.length ? (search ? "Try another search." : "Your reminders will appear here.") : "No reminders here yet. Add one now and let your mind focus on what matters."}
                     </Text>
                     <View
                       style={{
@@ -1258,7 +1213,7 @@ export default function App() {
                       }}
                     >
                       <Btn
-                        title="Add your first reminder"
+                        title={reminders.length ? "Add reminder" : "Add your first reminder"}
                         onPress={openNew}
                         icon={<Plus color="white" size={18} />}
                       />
@@ -1276,10 +1231,11 @@ export default function App() {
               renderItem={({ item }) => (
                 <ReminderRow
                   item={item}
-                  selected={selectedIds.includes(item.id)}
+                  selected={selectedSet.has(item.id)}
+                  selectionMode={selectionMode}
                   onLongPress={() => toggleSelection(item.id)}
                   onOpen={(r) =>
-                    selectedIds.length ? toggleSelection(r.id) : openReminder(r)
+                    selectionMode ? toggleSelection(r.id) : openReminder(r)
                   }
                 />
               )}
@@ -1292,6 +1248,11 @@ export default function App() {
               }}
               ListHeaderComponent={
                 <View>
+                  {selectionMode && <SelectionToolbar count={selectedIds.length} total={calendarRows.length}
+                    onSelectAll={() => setSelectedIds(selectedIds.length === calendarRows.length ? [] : calendarRows.map((r) => r.id))}
+                    onCancel={() => { setSelectionMode(false); setSelectedIds([]); }}
+                    onDelete={() => deleteMany(calendarRows.filter((r) => selectedSet.has(r.id)).map((r) => r.id))} />}
+
                   <Text
                     style={{
                       color: palette.text,
@@ -1522,50 +1483,8 @@ export default function App() {
                   palette={palette}
                   icon={<Sun color={palette.brand} />}
                   title="Appearance"
-                  subtitle="Choose light, dark or follow device"
-                  right={
-                    <Text
-                      style={{
-                        color: palette.brand,
-                        fontWeight: "800",
-                      }}
-                    >
-                      {settings.theme === "system"
-                        ? "System"
-                        : settings.theme === "dark"
-                          ? "Dark"
-                          : "Light"}
-                    </Text>
-                  }
-                  onPress={() =>
-                    Alert.alert("Appearance", "Choose a theme", [
-                      {
-                        text: "Light",
-                        onPress: () =>
-                          updateSettings({
-                            theme: "light",
-                          }),
-                      },
-                      {
-                        text: "Dark",
-                        onPress: () =>
-                          updateSettings({
-                            theme: "dark",
-                          }),
-                      },
-                      {
-                        text: "Follow device",
-                        onPress: () =>
-                          updateSettings({
-                            theme: "system",
-                          }),
-                      },
-                      {
-                        text: "Cancel",
-                        style: "cancel",
-                      },
-                    ])
-                  }
+                  subtitle={isDark ? "Dark Mode" : "Light Mode"}
+                  right={<SettingsToggle label="Dark Mode" value={isDark} onValueChange={(value) => updateSettings({ theme: value ? "dark" : "light" })} />}
                 />
                 <SettingRow
                   palette={palette}
@@ -2656,6 +2575,7 @@ export default function App() {
             </View>
           </View>
         </Modal>
+        <AppDialog dialog={dialog} onClose={closeDialog} />
       </PaletteContext.Provider>
     </SafeAreaView>
   );

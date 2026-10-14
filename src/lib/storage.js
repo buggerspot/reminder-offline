@@ -11,7 +11,7 @@ let writeQueue = Promise.resolve();
 let settingsWriteQueue = Promise.resolve();
 
 export const DEFAULT_SETTINGS = {
-  theme: "system",
+  theme: "light",
   soundEnabled: true,
   keepReminderAfterDismiss: true,
   confirmBeforeClear: false,
@@ -82,6 +82,7 @@ export async function loadSettings() {
     return {
       ...DEFAULT_SETTINGS,
       ...(value ? JSON.parse(value) : {}),
+      theme: value && JSON.parse(value).theme === "dark" ? "dark" : "light",
       soundEnabled: true,
       keepReminderAfterDismiss: true,
       confirmBeforeClear: false,

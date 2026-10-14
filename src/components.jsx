@@ -1,6 +1,6 @@
 import React, { useContext } from "react";
-import { View, Text, TextInput, Pressable, Switch } from "react-native";
-import { CalendarDays, CheckCircle2, ChevronRight } from "lucide-react-native";
+import { View, Text, TextInput, Pressable, Switch, Modal } from "react-native";
+import { CalendarDays, CheckCircle2, ChevronRight, Square, CheckSquare, Trash2 } from "lucide-react-native";
 import { formatDate, formatTime } from "./lib/format";
 export const PaletteContext = React.createContext(null);
 export function RecurrenceLabel({ repeat, missed }) {
@@ -252,7 +252,7 @@ export const Chip = ({ label, active, onPress }) => {
   );
 };
 export const ReminderRow = React.memo(
-  ({ item, onOpen, onLongPress, selected }) => {
+  ({ item, onOpen, onLongPress, selected, selectionMode }) => {
     const palette = useContext(PaletteContext);
     return (
       <Pressable
@@ -283,7 +283,7 @@ export const ReminderRow = React.memo(
             marginRight: 12,
           }}
         >
-          {selected ? (
+          {selectionMode ? (selected ? <CheckSquare color={palette.brand} size={21} /> : <Square color={palette.brand} size={21} />) : selected ? (
             <CheckCircle2 color={palette.brand} size={21} />
           ) : (
             <CalendarDays color={palette.brand} size={21} />
@@ -338,3 +338,28 @@ export const ReminderRow = React.memo(
     );
   },
 );
+
+export function SelectionToolbar({ count, total, onSelectAll, onDelete, onCancel }) {
+  const palette = useContext(PaletteContext);
+  return <Card style={{ marginBottom: 16 }}><View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+    <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: count > 0 && count === total }} accessibilityLabel="Select all" onPress={onSelectAll} style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
+      {count > 0 && count === total ? <CheckSquare color={palette.brand} size={22} /> : <Square color={palette.brand} size={22} />}
+      <Text style={{ color: palette.text }}>Select All ({count})</Text>
+    </Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel="Delete selected reminders" disabled={!count} onPress={onDelete} hitSlop={10}><Trash2 size={22} color={count ? palette.danger : palette.muted} /></Pressable>
+    <Btn title="Cancel" secondary onPress={onCancel} />
+  </View></Card>;
+}
+export function AppDialog({ dialog, onClose }) {
+  const palette = useContext(PaletteContext);
+  const buttons = dialog?.buttons || [{ text: "OK" }];
+  return <Modal visible={!!dialog} transparent animationType="fade" onRequestClose={onClose}>
+    <View style={{ flex: 1, backgroundColor: "#0008", justifyContent: "center", padding: 24 }}>
+      <Card style={{ width: "100%", maxWidth: 460, alignSelf: "center", padding: 24, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 24, elevation: 8 }}>
+        <Text accessibilityRole="header" style={{ color: palette.text, fontSize: 20, fontWeight: "800" }}>{dialog?.title}</Text>
+        {!!dialog?.message && <Text style={{ color: palette.muted, fontSize: 15, lineHeight: 23, marginTop: 12 }}>{dialog.message}</Text>}
+        <View style={{ gap: 10, marginTop: 24 }}>{buttons.map((button, i) => <Btn key={i} title={button.text} secondary={button.style === "cancel"} danger={button.style === "destructive"} onPress={async () => { onClose(); try { await button.onPress?.(); } catch (e) { console.warn(e); } }} />)}</View>
+      </Card>
+    </View>
+  </Modal>;
+}
