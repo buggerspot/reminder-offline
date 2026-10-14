@@ -62,13 +62,14 @@ import {
   loadSettings,
   saveSettings,
 } from "./src/lib/storage";
+import { cleanupCompleted } from "./src/lib/retention";
+import { reminderCategories } from "./src/lib/categories";
 import { deleteSelected } from "./src/lib/selection";
 import { exportJSON, importReminders, newReminders } from "./src/lib/exportImport";
 import {
   occursOn,
   nextOccurrence,
   displayOccurrence,
-  isMissed,
   validDate,
   localDate,
 } from "./src/lib/recurrence";
@@ -229,7 +230,9 @@ export default function App() {
       const [r, s] = await Promise.all([loadReminders(), loadSettings()]);
       if (!Array.isArray(r))
         throw new Error("Stored reminder data is invalid.");
-      setReminders(r);
+      const retained = cleanupCompleted(r);
+      if (retained !== r) await saveReminders(retained);
+      setReminders(retained);
       dataReady.current = true;
       setSettings(s);
       setSounds(await loadSounds());
@@ -263,6 +266,7 @@ export default function App() {
                 ? r.repeat && r.repeat !== "none"
                   ? {
                       ...r,
+                      completedDateTimes: { ...r.completedDateTimes, ...Object.fromEntries(dates.map((date) => [date, new Date().toISOString()])) },
                       completedDates: [
                         ...new Set([...(r.completedDates || []), ...dates]),
                       ],
@@ -363,6 +367,25 @@ export default function App() {
       active = false;
     };
   }, [loaded, reminders, settings.defaultSoundId, sounds]);
+  useEffect(() => {
+    if (!loaded || !dataReady.current) return;
+    const current = reminderRef.current;
+    const retained = cleanupCompleted(current, clock);
+    if (retained === current) return;
+    // Update the ref immediately so foreground refresh uses the same snapshot.
+    reminderRef.current = retained;
+    setReminders(retained);
+    setSelectedIds((ids) => ids.filter((id) => retained.some((r) => r.id === id)));
+    setDetail((item) => item && !retained.some((r) => r.id === item.id) ? null : item);
+    saveReminders(retained).catch((e) => {
+      console.warn("Completed reminder cleanup", e);
+      // Retry on the next clock tick if persistence failed.
+      if (reminderRef.current === retained) {
+        reminderRef.current = current;
+        setReminders(current);
+      }
+    });
+  }, [loaded, clock, reminders]);
   const markComplete = useCallback(
     async (id) => {
       const current = reminders.find((x) => x.id === id);
@@ -378,6 +401,7 @@ export default function App() {
           r.id === id
             ? {
                 ...r,
+                completedDateTimes: { ...r.completedDateTimes, [occurrenceDate]: new Date().toISOString() },
                 completedDates: [
                   ...new Set([...(r.completedDates || []), occurrenceDate]),
                 ],
@@ -577,6 +601,7 @@ export default function App() {
         soundId: settings.defaultSoundId || null,
         soundUri:
           sounds.find((s) => s.id === settings.defaultSoundId)?.uri || null,
+        completedDateTimes: editing?.completedDateTimes || {},
         completedDates: editing?.completedDates || [],
         repeatUntil: form.repeatUntil,
         completed: false,
@@ -656,38 +681,8 @@ export default function App() {
         },
       ],
     );
-  const tabRows = useMemo(() => {
-    const now = new Date(clock);
-    return reminders
-      .filter((r) => {
-        if (filter === "Completed")
-          return r.completed || (r.completedDates || []).length > 0;
-        if (filter === "Missed") return isMissed(r, now);
-        return !r.completed && !isMissed(r, now);
-      })
-      .map((r) =>
-        filter === "Completed" && !r.completed
-          ? {
-              ...r,
-              seriesDate: r.date,
-              date: r.completedDates[r.completedDates.length - 1],
-              completed: true,
-            }
-          : displayOccurrence(r, now),
-      )
-      .filter(Boolean)
-      .map((r) =>
-        filter === "Missed"
-          ? {
-              ...r,
-              missed: true,
-            }
-          : r,
-      )
-      .sort((a, b) =>
-        (a.date + " " + a.time).localeCompare(b.date + " " + b.time),
-      );
-  }, [reminders, filter, clock]);
+  const categoryRows = useMemo(() => reminderCategories(reminders, new Date(clock)), [reminders, clock]);
+  const tabRows = categoryRows[filter];
   const visible = useMemo(() => {
     const query = deferredSearch.trim().toLowerCase();
     return query ? tabRows.filter((r) => (r.title + " " + (r.description || "")).toLowerCase().includes(query)) : tabRows;
@@ -705,17 +700,6 @@ export default function App() {
         }))
         .sort((a, b) => a.time.localeCompare(b.time)),
     [reminders, selectedDate],
-  );
-  const stats = useMemo(
-    () => ({
-      active: reminders.filter((r) => !r.completed).length,
-      today: reminders.filter((r) => occursOn(r, localDate(new Date(clock))))
-        .length,
-      completed: reminders.filter(
-        (r) => r.completed || r.completedDates?.length,
-      ).length,
-    }),
-    [reminders, clock],
   );
   const calendarDays = useMemo(() => {
     const year = calendarMonth.getFullYear(),
@@ -869,15 +853,16 @@ export default function App() {
     >
       <PaletteContext.Provider value={palette}>
         <ExpoStatusBar style={isDark ? "light" : "dark"} />
-        {!permission && !bannerDismissed && (
+        {(!permission || alarmStatus?.exact === false) && !bannerDismissed && (
           <PermissionBanner
-            message="Enable notifications to receive your reminders on time."
+            message={!permission ? "Enable notifications to receive your reminders on time." : "Precise timing is disabled. Reminders may arrive late. Allow alarms & reminders for accurate timing."}
+            actionTitle={!permission ? "Enable Notifications" : "Enable precise timing"}
             onDismiss={() => setBannerDismissed(true)}
             onEnable={async () => {
               try {
                 if (NativeModules.ReminderNative)
                   await NativeModules.ReminderNative.openSettings(
-                    "notifications",
+                    !permission ? "notifications" : "alarms",
                   );
                 else await Linking.openSettings();
               } catch {
@@ -896,33 +881,10 @@ export default function App() {
         >
           {tab === "Home" && (
             <FlatList
-              data={visible}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <ReminderRow
-                  item={item}
-                  selected={selectedSet.has(item.id)}
-                  selectionMode={selectionMode}
-                  onLongPress={() => toggleSelection(item.id)}
-                  onOpen={(r) =>
-                    selectionMode ? toggleSelection(r.id) : openReminder(r)
-                  }
-                />
-              )}
-              initialNumToRender={12}
-              maxToRenderPerBatch={12}
-              windowSize={7}
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{
-                padding: 20,
-                paddingBottom: 110,
-              }}
-              ListHeaderComponent={
-                <View>
-                  {selectionMode && <SelectionToolbar count={selectedIds.length} total={tabRows.length}
-                    onSelectAll={() => setSelectedIds(selectedIds.length === tabRows.length ? [] : tabRows.map((r) => r.id))}
-                    onCancel={() => { setSelectionMode(false); setSelectedIds([]); }}
-                    onDelete={() => deleteMany(tabRows.filter((r) => selectedSet.has(r.id)).map((r) => r.id))} />}
+              data={[{id: "header", header: true}, {id: "controls", controls: true}, ...visible]}
+              stickyHeaderIndices={[1]}
+              keyExtractor={(item) => item.header ? "list-header" : item.controls ? "list-controls" : `reminder:${item.id}`}
+              renderItem={({ item }) => item.header ? (<View>
 
                   <View
                     style={{
@@ -1046,105 +1008,14 @@ export default function App() {
                       </Text>
                     </Pressable>
                   </View>
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      gap: 10,
-                      marginBottom: 23,
-                    }}
-                  >
-                    {[
-                      {
-                        n: stats.active,
-                        l: "Active",
-                        color: "#D1FAE5",
-                      },
-                      {
-                        n: stats.today,
-                        l: "Today",
-                        color: "#FEF3C7",
-                      },
-                      {
-                        n: stats.completed,
-                        l: "Completed",
-                        color: "#DBEAFE",
-                      },
-                    ].map((s) => (
-                      <View
-                        key={s.l}
-                        style={{
-                          flex: 1,
-                          backgroundColor: palette.card,
-                          borderColor: palette.border,
-                          borderWidth: 1,
-                          borderRadius: 17,
-                          padding: 15,
-                        }}
-                      >
-                        <Text
-                          style={{
-                            color: palette.text,
-                            fontSize: 23,
-                            fontWeight: "800",
-                          }}
-                        >
-                          {s.n}
-                        </Text>
-                        <Text
-                          style={{
-                            color: palette.muted,
-                            fontSize: 11,
-                            marginTop: 3,
-                          }}
-                        >
-                          {s.l}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: 13,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: palette.text,
-                        fontSize: 19,
-                        fontWeight: "800",
-                      }}
-                    >
-                      Your reminders
-                    </Text>
-                    <Pressable onPress={() => setTab("Calendar")}>
-                      <Text
-                        style={{
-                          color: palette.brand,
-                          fontWeight: "700",
-                        }}
-                      >
-                        View calendar
-                      </Text>
-                    </Pressable>
-                  </View>
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      marginBottom: 14,
-                    }}
-                  >
-                    {["Upcoming", "Completed", "Missed"].map((x) => (
-                      <Chip
-                        key={x}
-                        label={x}
-                        active={filter === x}
-                        onPress={() => setFilter(x)}
-                      />
-                    ))}
-                  </View>
+
+                  <View style={{flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 13}}><Text style={{color: palette.text, fontSize: 19, fontWeight: "800"}}>Your reminders</Text><Pressable onPress={() => setTab("Calendar")}><Text style={{color: palette.brand, fontWeight: "700"}}>View calendar</Text></Pressable></View>
+                </View>) : item.controls ? (<View style={{ backgroundColor: palette.bg, paddingTop: 8 }}>
+                  <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>{["Upcoming", "Completed", "Missed"].map(category => <Pressable key={category} accessibilityRole="tab" accessibilityState={{selected: filter === category}} onPress={() => setFilter(category)} style={{flex: 1, backgroundColor: filter === category ? palette.brand : palette.card, borderColor: filter === category ? palette.brand : palette.border, borderWidth: 1, borderRadius: 17, padding: 12}}>
+                  <Text style={{color: filter === category ? palette.onBrand : palette.text, fontSize: 23, fontWeight: "800"}}>{categoryRows[category].length}</Text>
+                  <Text style={{color: filter === category ? palette.onBrand : palette.muted, fontSize: 11, marginTop: 3}}>{category}</Text>
+                  </Pressable>)}</View>
+                  <SelectionToolbar context={filter === "Completed" ? "Completed reminders are automatically removed after 7 days." : filter === "Missed" ? "Missed reminders stay here until you complete or delete them." : "Long-press a reminder to select and manage it."} active={selectionMode} count={selectedIds.length} total={tabRows.length} onSelectAll={() => setSelectedIds(selectedIds.length === tabRows.length ? [] : tabRows.map(r => r.id))} onCancel={() => {setSelectionMode(false);setSelectedIds([]);}} onDelete={() => deleteMany(tabRows.filter(r => selectedSet.has(r.id)).map(r => r.id))} />
                   <View
                     style={{
                       flexDirection: "row",
@@ -1175,9 +1046,27 @@ export default function App() {
                       </Pressable>
                     ) : null}
                   </View>
-                </View>
-              }
-              ListEmptyComponent={
+                  </View>) : (
+                <ReminderRow
+                  item={item}
+                  selected={selectedSet.has(item.id)}
+                  selectionMode={selectionMode}
+                  onLongPress={() => toggleSelection(item.id)}
+                  onOpen={(r) =>
+                    selectionMode ? toggleSelection(r.id) : openReminder(r)
+                  }
+                />
+              )}
+              initialNumToRender={12}
+              maxToRenderPerBatch={12}
+              windowSize={7}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{
+                padding: 20,
+                paddingBottom: 110,
+              }}
+
+              ListFooterComponent={visible.length ? null :
                 <Card>
                   <View
                     style={{
@@ -1225,6 +1114,7 @@ export default function App() {
           )}
 
           {tab === "Calendar" && (
+            <View style={{flex: 1}}><View style={{paddingHorizontal: 20}}><SelectionToolbar active={selectionMode} count={selectedIds.length} total={calendarRows.length} onSelectAll={() => setSelectedIds(selectedIds.length === calendarRows.length ? [] : calendarRows.map(r => r.id))} onCancel={() => {setSelectionMode(false);setSelectedIds([]);}} onDelete={() => deleteMany(calendarRows.filter(r => selectedSet.has(r.id)).map(r => r.id))} /></View>
             <FlatList
               data={calendarRows}
               keyExtractor={(item) => item.id}
@@ -1248,10 +1138,6 @@ export default function App() {
               }}
               ListHeaderComponent={
                 <View>
-                  {selectionMode && <SelectionToolbar count={selectedIds.length} total={calendarRows.length}
-                    onSelectAll={() => setSelectedIds(selectedIds.length === calendarRows.length ? [] : calendarRows.map((r) => r.id))}
-                    onCancel={() => { setSelectionMode(false); setSelectedIds([]); }}
-                    onDelete={() => deleteMany(calendarRows.filter((r) => selectedSet.has(r.id)).map((r) => r.id))} />}
 
                   <Text
                     style={{
@@ -1434,6 +1320,7 @@ export default function App() {
                 </Text>
               }
             />
+            </View>
           )}
 
           {tab === "Settings" && (
@@ -1540,11 +1427,7 @@ export default function App() {
                     lineHeight: 18,
                   }}
                 >
-                  Allow alarms & reminders for precise delivery. Without access
-                  Android uses approximate alarms and may prevent continuous
-                  audio in the background. No battery exemption is needed. Force
-                  stopping, silent channels and device settings can delay or
-                  silence reminders.
+                  Allow clock and reminder permissions so reminders can arrive as close to their scheduled time as possible.
                 </Text>
               </Card>
               <Text

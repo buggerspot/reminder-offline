@@ -123,7 +123,7 @@ object ReminderEngine {
         if (normalized.toString() == r.toString() && old.optLong("scheduledAt") > System.currentTimeMillis()) continue
         if (r.optBoolean("completed") || oldDates.toString() != completed.toString()) {
           ReminderPlaybackService.stop(c, r.getString("id"))
-          (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(r.getString("id"),1)
+          (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(ReminderPlaybackService.notificationId(r.getString("id")))
         }
       }
       prefs(c).edit().putString(key, r.toString()).apply()
@@ -132,7 +132,7 @@ object ReminderEngine {
     previous.keys.filter { it !in retained }.forEach { key ->
       val id = key.removePrefix("r:")
       ReminderPlaybackService.stop(c,id)
-      (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(id, 1)
+      (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(ReminderPlaybackService.notificationId(id))
       prefs(c).edit().remove(key).apply()
     }
     arm(c)
@@ -185,18 +185,15 @@ object ReminderEngine {
     val open = PendingIntent.getActivity(c, id.hashCode(), launch, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     val complete = PendingIntent.getBroadcast(c, 0, Intent(c,ReminderReceiver::class.java).setAction("REMINDER_COMPLETE").setData(Uri.parse("offline-reminder://complete/${Uri.encode(id)}/$date")).putExtra("id",id).putExtra("date",date), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     val clear = PendingIntent.getBroadcast(c, 0, Intent(c,ReminderReceiver::class.java).setAction("REMINDER_CLEAR").setData(Uri.parse("offline-reminder://clear/${Uri.encode(id)}")).putExtra("id",id), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-    val notification = NotificationCompat.Builder(c,channel).setSound(null).setVibrate(longArrayOf(0,250,150,250)).setSmallIcon(R.drawable.ic_reminder_notification).setContentTitle(r.getString("title")).setContentText(r.optString("description").ifEmpty {"It is time for your reminder."}).setSubText("Offline Reminder").setContentIntent(open).setAutoCancel(false).setCategory(NotificationCompat.CATEGORY_REMINDER).setPriority(NotificationCompat.PRIORITY_HIGH).setDeleteIntent(clear).addAction(0,"Mark complete",complete).addAction(0,"Clear",clear).build()
+    val notification = NotificationCompat.Builder(c,channel).setOnlyAlertOnce(true).setSound(null).setVibrate(longArrayOf(0,250,150,250)).setSmallIcon(R.drawable.ic_reminder_notification).setContentTitle(r.getString("title")).setContentText(r.optString("description").ifEmpty {"It is time for your reminder."}).setSubText("Offline Reminder").setContentIntent(open).setAutoCancel(false).setCategory(NotificationCompat.CATEGORY_REMINDER).setPriority(NotificationCompat.PRIORITY_HIGH).setDeleteIntent(clear).addAction(0,"Mark complete",complete).addAction(0,"Clear",clear).build()
+    try {manager.notify(ReminderPlaybackService.notificationId(id),notification)} catch (_: SecurityException) { /* permission banner handles this */ }
     // Playback owns audio; the notification channel stays silent to avoid overlap.
-    var playing = false
     val permitted = Build.VERSION.SDK_INT < 26 || manager.getNotificationChannel(channel)?.let { it.importance >= NotificationManager.IMPORTANCE_DEFAULT } == true
     if (uri != null && permitted && androidx.core.app.NotificationManagerCompat.from(c).areNotificationsEnabled() && manager.currentInterruptionFilter == NotificationManager.INTERRUPTION_FILTER_ALL) {
       try {
-        ContextCompat.startForegroundService(c, Intent(c, ReminderPlaybackService::class.java).putExtra("id",id).putExtra("uri",uri.toString()).putExtra("trigger",date).putExtra("custom",r.optString("soundUri").isNotEmpty() && r.optString("soundUri") != "null"))
-        playing = true
+        ContextCompat.startForegroundService(c, Intent(c, ReminderPlaybackService::class.java).putExtra("id",id).putExtra("uri",uri.toString()).putExtra("trigger","$date/${r.getString("time")}").putExtra("notification",notification))
       } catch(e:Exception) {android.util.Log.w("OfflineReminder","Background playback unavailable",e)}
     }
-    if (playing) notification.flags = notification.flags or Notification.FLAG_ONLY_ALERT_ONCE
-    try {manager.notify(id,1,notification)} catch (_: SecurityException) { /* permission banner handles this */ }
     // Schedule the next occurrence even when this one is never completed.
     schedule(c,r)
   }
@@ -213,7 +210,7 @@ object ReminderEngine {
   }
   fun clear(c: Context, id: String) {
     ReminderPlaybackService.stop(c,id)
-    (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(id,1)
+    (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(ReminderPlaybackService.notificationId(id))
   }
   @Synchronized fun takeCompletions(c: Context): String {
     val value = prefs(c).getString("actions","[]")!!
@@ -302,6 +299,8 @@ class ReminderNativePackage : BaseReactPackage() {
 /** Exists only while delivered reminders are ringing; scheduling never keeps a service alive. */
 class ReminderPlaybackService : Service() {
   private val players = mutableMapOf<String, MediaPlayer>()
+  private var foregroundId = 0
+  private val notifications = mutableMapOf<String, Notification>()
   private val handler = android.os.Handler(android.os.Looper.getMainLooper())
   override fun onBind(intent: Intent?): IBinder? = null
   override fun onCreate() { super.onCreate(); instance = this }
@@ -312,15 +311,16 @@ class ReminderPlaybackService : Service() {
       return START_NOT_STICKY
     }
     val id = intent?.getStringExtra("id") ?: run {stopSelf(); return START_NOT_STICKY}
-    val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-    if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(NotificationChannel("reminder-playback", "Reminder playback", NotificationManager.IMPORTANCE_LOW).apply {setSound(null,null)})
-    val clear = PendingIntent.getService(this,0,Intent(this,ReminderPlaybackService::class.java).setAction("CLEAR_ALL"),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-    val notification = NotificationCompat.Builder(this,"reminder-playback").setSmallIcon(R.drawable.ic_reminder_notification).setContentTitle("Reminder sound is playing").setContentText("Clear or complete the reminder to stop").setOngoing(true).addAction(0,"Stop sounds",clear).build()
-    if (Build.VERSION.SDK_INT >= 29) startForeground(PLAYBACK_ID,notification,android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK) else startForeground(PLAYBACK_ID,notification)
+    @Suppress("DEPRECATION")
+    val notification = intent.getParcelableExtra<Notification>("notification") ?: run { stopSelf(); return START_NOT_STICKY }
+    if (foregroundId != 0 && foregroundId != notificationId(id)) stopForeground(STOP_FOREGROUND_DETACH)
+    notifications[id] = notification
+    foregroundId = notificationId(id)
+    if (Build.VERSION.SDK_INT >= 29) startForeground(foregroundId,notification,android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK) else startForeground(foregroundId,notification)
     val history = getSharedPreferences("reminder-playback-history", Context.MODE_PRIVATE)
     val trigger = intent.getStringExtra("trigger") ?: ""
     if (history.getString(id,null) == trigger) {
-      if (players.isEmpty()) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+      if (players.isEmpty()) { stopForeground(STOP_FOREGROUND_DETACH); stopSelf() }
       return START_NOT_STICKY
     }
     history.edit().putString(id,trigger).commit()
@@ -334,19 +334,31 @@ class ReminderPlaybackService : Service() {
       player.setWakeMode(this,PowerManager.PARTIAL_WAKE_LOCK)
       player.setOnCompletionListener { if (players[id] === it) remove(id) }
       player.setOnErrorListener { value,_,_ -> if (players[id] === value) remove(id); true }
-      player.prepare()
-      player.start()
-      if (!intent.getBooleanExtra("custom",false)) handler.postDelayed({ if (players[id] === player) remove(id) },5000)
+      player.setOnPreparedListener {
+        if (players[id] === it) {
+          it.start()
+          handler.postDelayed({ if (players[id] === it) remove(id) },30_000)
+        }
+      }
+      player.prepareAsync()
     } catch(e:Exception) { android.util.Log.w("OfflineReminder","Cannot play reminder sound",e); remove(id) }
     return START_NOT_STICKY
   }
   private fun remove(id:String) {
     players.remove(id)?.release()
-    if (players.isEmpty()) {stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()}
+    notifications.remove(id)
+    if (players.isNotEmpty() && foregroundId == notificationId(id)) {
+      val other = players.keys.first()
+      stopForeground(STOP_FOREGROUND_DETACH)
+      foregroundId = notificationId(other)
+      val notification = notifications.getValue(other)
+      if (Build.VERSION.SDK_INT >= 29) startForeground(foregroundId, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK) else startForeground(foregroundId, notification)
+    }
+    if (players.isEmpty()) {stopForeground(STOP_FOREGROUND_DETACH);stopSelf()}
   }
-  override fun onDestroy() {handler.removeCallbacksAndMessages(null);players.values.forEach {it.release()};players.clear();instance=null;super.onDestroy()}
+  override fun onDestroy() {stopForeground(STOP_FOREGROUND_DETACH);handler.removeCallbacksAndMessages(null);players.values.forEach {it.release()};players.clear();instance=null;super.onDestroy()}
   companion object {
-    private const val PLAYBACK_ID = 91842
+    fun notificationId(id: String): Int = ("reminder:$id".hashCode() and 0x7fffffff).coerceAtLeast(1)
     @Volatile private var instance: ReminderPlaybackService? = null
     fun stop(c:Context,id:String) {android.os.Handler(android.os.Looper.getMainLooper()).post {instance?.remove(id)}}
   }
