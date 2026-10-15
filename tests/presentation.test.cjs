@@ -73,3 +73,36 @@ test('programmatic reminder updates preserve the presentation and cleanup can cl
   details.set(null);
   assert.equal(details.open({ id: 'next' }), true);
 });
+
+test('Home category selection is tap-only, isolated, and ignores duplicate or invalid taps', async () => {
+  const { createCategorySelection, createTabNavigation } = await logic;
+  const categories = createCategorySelection(['Upcoming', 'Completed', 'Missed']);
+  const navigation = createTabNavigation(['Home', 'Calendar', 'Settings']);
+  const updates = [];
+  let navigationUpdates = 0;
+  categories.subscribe(() => updates.push(categories.getSnapshot()));
+  navigation.subscribe(() => navigationUpdates++);
+  categories.select('Completed');
+  categories.select('Completed');
+  categories.select('unknown');
+  categories.select('Missed');
+  categories.select('Upcoming');
+  assert.deepEqual(updates, ['Completed', 'Missed', 'Upcoming']);
+  assert.equal(navigationUpdates, 0);
+  assert.equal(navigation.getSnapshot(), 'Home');
+  assert.equal(categories.beginSwipe, undefined);
+});
+
+test('sheet layout reuse invalidates for visible edits, width, text scale, and safe-area changes', async () => {
+  const { reminderLayoutKey } = await logic;
+  const item = { id: 'one', title: 'Appointment', description: 'Bring notes', date: '2026-10-15', time: '12:00', repeat: 'none', completed: false };
+  const key = reminderLayoutKey(item, 390, 1, 16);
+  assert.equal(reminderLayoutKey({ ...item, notificationId: 'rescheduled', updatedAt: 'later' }, 390, 1, 16), key);
+  for (const patch of [{ title: 'Longer title' }, { description: 'A longer description\nwith multiple lines' }, { date: '2026-10-16' }, { time: '14:00' }, { completed: true }, { imageUri: 'file:///new-image.png' }, { repeat: 'daily' }, { repeatUntil: '2026-11-01' }]) {
+    assert.notEqual(reminderLayoutKey({ ...item, ...patch }, 390, 1, 16), key);
+  }
+  assert.notEqual(reminderLayoutKey(item, 844, 1, 16), key);
+  assert.notEqual(reminderLayoutKey(item, 390, 1.5, 16), key);
+  assert.notEqual(reminderLayoutKey(item, 390, 1, 0), key);
+  assert.equal(reminderLayoutKey(null, 390, 1), null);
+});

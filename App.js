@@ -111,9 +111,10 @@ import {
 } from "./src/interaction-components";
 import { PermissionOnboarding } from "./src/permission-onboarding";
 import { CATEGORY_NAMES, TAB_NAMES } from "./src/lib/interactions";
-import { createReminderPresentation, createTabNavigation } from "./src/lib/presentation";
+import { createReminderPresentation, createTabNavigation, createCategorySelection } from "./src/lib/presentation";
 import { ReminderDetails } from "./src/reminder-details";
 import { MainTabBar } from "./src/main-tab-bar";
+import { HomeReminders } from "./src/home-reminders";
 const C = {
   brand: "#0F766E",
   brand2: "#14B8A6",
@@ -157,7 +158,7 @@ function ReminderApp() {
   const setTab = useCallback(name => navigation.navigate(name), [navigation]);
   const onTabBarLayout = useCallback(e => setTabBarHeight(e.nativeEvent.layout.height), []);
   const [tabBarHeight, setTabBarHeight] = useState(60);
-  const [filter, setFilter] = useState("Upcoming");
+  const [categories] = useState(() => createCategorySelection(CATEGORY_NAMES));
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState(null);
   const [details] = useState(createReminderPresentation);
@@ -237,10 +238,11 @@ function ReminderApp() {
   };
   const selectionMode = selectedIds.length > 0;
   useEffect(() => navigation.subscribe(() => setSelectedIds(ids => ids.length ? [] : ids)), [navigation]);
+  useEffect(() => categories.subscribe(() => setSelectedIds(ids => ids.length ? [] : ids)), [categories]);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   useEffect(() => {
     setSelectedIds([]);
-  }, [filter, selectedDate, search]);
+  }, [selectedDate, search]);
   const isDark = settings.theme === "dark";
   const palette = useMemo(
     () =>
@@ -737,7 +739,7 @@ function ReminderApp() {
               const next = deleteSelected(
                 reminderRef.current,
                 deletedIds,
-                navigation.getSnapshot() === "Home" ? filter : "Calendar",
+                navigation.getSnapshot() === "Home" ? categories.getSnapshot() : "Calendar",
               );
               for (const r of reminders.filter((r) => deletedIds.has(r.id))) {
                 await NativeModules.ReminderNative?.clearNotification?.(r.id);
@@ -763,8 +765,8 @@ function ReminderApp() {
       ? categoryRows[category].filter(r => (r.title + " " + (r.description || "")).toLowerCase().includes(query))
       : categoryRows[category]]));
   }, [categoryRows, deferredSearch]);
-  const visible = searchedCategories[filter];
   const completeSelected = async () => {
+    const visible = searchedCategories[categories.getSnapshot()];
     const rows = new Map(
       visible.filter((r) => selectedSet.has(r.id)).map((r) => [r.id, r]),
     );
@@ -801,14 +803,14 @@ function ReminderApp() {
   );
   useEffect(() => {
     const available = new Set(
-      (navigation.getSnapshot() === "Calendar" ? calendarRows : visible).map((r) => r.id),
+      (navigation.getSnapshot() === "Calendar" ? calendarRows : searchedCategories[categories.getSnapshot()]).map((r) => r.id),
     );
     setSelectedIds((ids) =>
       ids.every((id) => available.has(id))
         ? ids
         : ids.filter((id) => available.has(id)),
     );
-  }, [navigation, calendarRows, visible]);
+  }, [navigation, calendarRows, searchedCategories, categories]);
   const calendarDays = useMemo(() => {
     const year = calendarMonth.getFullYear(),
       month = calendarMonth.getMonth();
@@ -1385,361 +1387,7 @@ function ReminderApp() {
         >
           <TabPager navigation={navigation}>
           <View style={{ flex: 1 }}>
-            <FlatList
-              boundaryInset={tabBarHeight}
-              data={homeRows[filter]}
-              stickyHeaderIndices={[1]}
-              keyExtractor={(item) =>
-                item.header
-                  ? "list-header"
-                  : item.controls
-                    ? "list-controls"
-                    : `reminder:${item.id}`
-              }
-              renderItem={({ item }) =>
-                item.header ? (
-                  <View>
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        marginBottom: 22,
-                      }}
-                    >
-                      <View>
-                        <Text
-                          style={{
-                            color: palette.muted,
-                            fontSize: 13,
-                          }}
-                        >
-                          YOUR PERSONAL ASSISTANT
-                        </Text>
-                        <Text
-                          style={{
-                            color: palette.text,
-                            fontSize: 28,
-                            fontWeight: "800",
-                            marginTop: 3,
-                          }}
-                        >
-                          Make time matter.
-                        </Text>
-                      </View>
-                      <Pressable
-                        onPress={() => setTab("Settings")}
-                        style={{
-                          width: 44,
-                          height: 44,
-                          borderRadius: 15,
-                          backgroundColor: palette.card,
-                          borderColor: palette.border,
-                          borderWidth: 1,
-                          alignItems: "center",
-                          justifyContent: "center",
-                        }}
-                      >
-                        <SettingsIcon color={palette.text} />
-                      </Pressable>
-                    </View>
-                    <View
-                      style={{
-                        backgroundColor: C.brand,
-                        borderRadius: 24,
-                        padding: 20,
-                        marginBottom: 22,
-                        overflow: "hidden",
-                      }}
-                    >
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                        }}
-                      >
-                        <View
-                          style={{
-                            flex: 1,
-                          }}
-                        >
-                          <Text
-                            style={{
-                              color: "#CCFBF1",
-                              fontSize: 12,
-                              fontWeight: "700",
-                            }}
-                          >
-                            A LITTLE MORE PEACE OF MIND
-                          </Text>
-                          <Text
-                            style={{
-                              color: "#FFFFFF",
-                              fontSize: 23,
-                              fontWeight: "800",
-                              marginTop: 8,
-                            }}
-                          >
-                            Remember what matters.
-                          </Text>
-                          <Text
-                            style={{
-                              color: "#D1FAE5",
-                              fontSize: 13,
-                              marginTop: 7,
-                              lineHeight: 19,
-                            }}
-                          >
-                            Big moments, tiny tasks — let us keep track.
-                          </Text>
-                        </View>
-                        <Bell color="#D1FAE5" size={50} />
-                      </View>
-                      <Pressable
-                        onPress={openNew}
-                        style={{
-                          backgroundColor: "#FFFFFF",
-                          borderRadius: 13,
-                          paddingVertical: 12,
-                          paddingHorizontal: 14,
-                          alignSelf: "flex-start",
-                          marginTop: 18,
-                          flexDirection: "row",
-                          alignItems: "center",
-                          gap: 8,
-                        }}
-                      >
-                        <Plus color={C.brand} size={18} />
-                        <Text
-                          style={{
-                            color: C.brand,
-                            fontWeight: "800",
-                          }}
-                        >
-                          Create reminder
-                        </Text>
-                      </Pressable>
-                    </View>
-
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        marginBottom: 13,
-                      }}
-                    >
-                      <Text
-                        style={{
-                          color: palette.text,
-                          fontSize: 19,
-                          fontWeight: "800",
-                        }}
-                      >
-                        Your reminders
-                      </Text>
-                      <Pressable onPress={() => setTab("Calendar")}>
-                        <Text
-                          style={{ color: palette.brand, fontWeight: "700" }}
-                        >
-                          View calendar
-                        </Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                ) : item.controls ? (
-                  <View style={{ backgroundColor: palette.bg, paddingTop: 8 }}>
-                    <View
-                      style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}
-                    >
-                      {["Upcoming", "Completed", "Missed"].map((category) => (
-                        <Pressable
-                          key={category}
-                          accessibilityRole="tab"
-                          accessibilityState={{ selected: filter === category }}
-                          onPress={() => setFilter(category)}
-                          style={{
-                            flex: 1,
-                            backgroundColor:
-                              filter === category
-                                ? palette.brand
-                                : palette.card,
-                            borderColor:
-                              filter === category
-                                ? palette.brand
-                                : palette.border,
-                            borderWidth: 1,
-                            borderRadius: 17,
-                            padding: 12,
-                          }}
-                        >
-                          <Text
-                            style={{
-                              color:
-                                filter === category
-                                  ? palette.onBrand
-                                  : palette.text,
-                              fontSize: 23,
-                              fontWeight: "800",
-                            }}
-                          >
-                            {categoryRows[category].length}
-                          </Text>
-                          <Text
-                            style={{
-                              color:
-                                filter === category
-                                  ? palette.onBrand
-                                  : palette.muted,
-                              fontSize: 11,
-                              marginTop: 3,
-                            }}
-                          >
-                            {category}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </View>
-                    <SelectionArea
-                      active={selectionMode}
-                      actions={
-                        <SelectionToolbar
-                          count={selectedIds.length}
-                          total={visible.length}
-                          onSelectAll={() =>
-                            setSelectedIds(
-                              selectedIds.length === visible.length
-                                ? []
-                                : visible.map((r) => r.id),
-                            )
-                          }
-                          onCancel={() => {
-                            setSelectedIds([]);
-                          }}
-                          onDelete={() =>
-                            deleteMany(
-                              visible
-                                .filter((r) => selectedSet.has(r.id))
-                                .map((r) => r.id),
-                            )
-                          }
-                          onComplete={
-                            filter === "Upcoming" ? completeSelected : undefined
-                          }
-                        />
-                      }
-                    >
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          backgroundColor: palette.card,
-                          borderWidth: 1,
-                          borderColor: palette.border,
-                          borderRadius: 14,
-                          paddingHorizontal: 12,
-                          height: 48,
-                        }}
-                      >
-                        <Search color={palette.muted} size={18} />
-                        <TextInput
-                          editable={!selectionMode}
-                          value={search}
-                          onChangeText={setSearch}
-                          placeholder="Search reminders"
-                          placeholderTextColor={palette.muted}
-                          style={{
-                            flex: 1,
-                            padding: 12,
-                            color: palette.text,
-                          }}
-                        />
-                        {search ? (
-                          <Pressable onPress={() => setSearch("")}>
-                            <X size={16} color={palette.muted} />
-                          </Pressable>
-                        ) : null}
-                      </View>
-                    </SelectionArea>
-                  </View>
-                ) : (
-                  <ReminderRow
-                    item={item}
-                    selected={selectedSet.has(item.id)}
-                    selectionMode={selectionMode}
-                    onLongPress={() => toggleSelection(item.id)}
-                    onOpen={(r) =>
-                      selectionMode ? toggleSelection(r.id) : openReminder(r)
-                    }
-                  />
-                )
-              }
-              initialNumToRender={12}
-              maxToRenderPerBatch={12}
-              windowSize={7}
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{
-                padding: 20,
-                paddingBottom: 110,
-              }}
-              ListFooterComponent={
-                visible.length ? null : (
-                  <Card>
-                    <View
-                      style={{
-                        alignItems: "center",
-                        paddingVertical: 20,
-                      }}
-                    >
-                      <CalendarDays color={palette.brand} size={34} />
-                      <Text
-                        style={{
-                          color: palette.text,
-                          fontWeight: "800",
-                          fontSize: 16,
-                          marginTop: 12,
-                        }}
-                      >
-                        {reminders.length
-                          ? `No ${filter.toLowerCase()} reminders.`
-                          : "A little room to breathe"}
-                      </Text>
-                      <Text
-                        style={{
-                          color: palette.muted,
-                          textAlign: "center",
-                          marginTop: 6,
-                          lineHeight: 20,
-                        }}
-                      >
-                        {reminders.length
-                          ? search
-                            ? "Try another search."
-                            : "Your reminders will appear here."
-                          : "No reminders here yet. Add one now and let your mind focus on what matters."}
-                      </Text>
-                      <View
-                        style={{
-                          marginTop: 16,
-                          width: "100%",
-                        }}
-                      >
-                        <Btn
-                          title={
-                            reminders.length
-                              ? "Add reminder"
-                              : "Add your first reminder"
-                          }
-                          onPress={openNew}
-                          icon={<Plus color="white" size={18} />}
-                        />
-                      </View>
-                    </View>
-                  </Card>
-                )
-              }
-            />
+            <HomeReminders categories={categories} C={C} categoryRows={categoryRows} completeSelected={completeSelected} deleteMany={deleteMany} homeRows={homeRows} openNew={openNew} openReminder={openReminder} reminders={reminders} search={search} searchedCategories={searchedCategories} selectedIds={selectedIds} selectedSet={selectedSet} selectionMode={selectionMode} setSearch={setSearch} setSelectedIds={setSelectedIds} setTab={setTab} tabBarHeight={tabBarHeight} toggleSelection={toggleSelection} />
           </View>
 
           <View style={{ flex: 1 }}>

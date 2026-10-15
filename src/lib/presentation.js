@@ -32,6 +32,24 @@ export function createTabNavigation(names) {
   };
 }
 
+// Tap-only categories publish solely to the Home section. Repeated taps are
+// no-ops and do not clear selections or trigger additional renders.
+export function createCategorySelection(names) {
+  const state = observable(names[0]);
+  return {
+    ...state,
+    select(name) { if (names.includes(name)) state.publish(name); },
+  };
+}
+
+// Only visible content and text-layout constraints invalidate sheet sizing.
+export function reminderLayoutKey(item, width, fontScale, bottomInset = 0) {
+  if (!item) return null;
+  return JSON.stringify([width, fontScale, bottomInset, item.title, item.description || "",
+    item.date, item.time, item.repeat || "none", item.repeatUntil || "",
+    item.imageUri || null, !!item.completed]);
+}
+
 // One presentation can be opening/open/closing at a time; no timeout debounce.
 export function createReminderPresentation() {
   const state = observable(null);

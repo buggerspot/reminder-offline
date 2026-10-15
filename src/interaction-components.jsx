@@ -4,11 +4,11 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import PagerView from "react-native-pager-view";
 import { BlurTargetView, BlurView } from "expo-blur";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
-import Animated, { cancelAnimation, ReduceMotion, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
+import Animated, { cancelAnimation, ReduceMotion, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming, Easing } from "react-native-reanimated";
 import { X } from "lucide-react-native";
 import Svg, { Defs, LinearGradient, Stop, Rect } from "react-native-svg";
 import { PaletteContext } from "./palette";
-import { createSheetOpening } from "./lib/presentation";
+import { createSheetOpening, reminderLayoutKey } from "./lib/presentation";
 import { boundaryPull, pageIndex, sheetDestination, TAB_NAMES } from "./lib/interactions";
 
 export function useReducedMotion() {
@@ -167,10 +167,14 @@ export function ZoomableImage({ uri, style, onError, onLongPress }) {
 
 const spring = { damping: 28, stiffness: 260, mass: 0.85, overshootClamping: true, reduceMotion: ReduceMotion.System };
 
+const entranceSpring = { ...spring, damping: 34, stiffness: 420, mass: 0.75, energyThreshold: 0.000001 };
+
 export const ReminderSheet = forwardRef(function ReminderSheet({ item, presentation, onClose, onDismiss, onExpand, onCollapse, expanded, children }, ref) {
   const palette = useContext(PaletteContext);
   const insets = useSafeAreaInsets();
-  const { height } = useWindowDimensions();
+  const { height, width, fontScale } = useWindowDimensions();
+  const layoutKey = reminderLayoutKey(item, width, fontScale, insets.bottom);
+  const layoutCache = useRef(new Map());
   const summary = useRef({ id: null, height: 0 });
   const [collapsed, setCollapsed] = useState(height * 0.28);
   const lifecycle = useRef("closed");
@@ -187,7 +191,7 @@ export const ReminderSheet = forwardRef(function ReminderSheet({ item, presentat
     presentation?.shown();
     const target = collapsedPosition();
     setCollapsed(target);
-    y.value = withSpring(expanded ? insets.top : target, spring);
+    y.value = withSpring(expanded ? insets.top : target, entranceSpring);
   };
   const finishClose = useCallback(() => { onClose(); }, [onClose]);
   const close = useCallback(() => {
@@ -197,7 +201,7 @@ export const ReminderSheet = forwardRef(function ReminderSheet({ item, presentat
     lifecycle.current = "closing";
     closing.value = true;
     Keyboard.dismiss();
-    y.value = withTiming(height, { duration: 190, reduceMotion: ReduceMotion.System }, done => { if (done) runOnJS(finishClose)(); });
+    y.value = withTiming(height, { duration: 150, easing: Easing.out(Easing.cubic), reduceMotion: ReduceMotion.System }, done => { if (done) runOnJS(finishClose)(); });
   }, [height, y, closing, finishClose, presentation]);
   useImperativeHandle(ref, () => ({ close }), [close]);
   const visible = !!item;
@@ -207,6 +211,12 @@ export const ReminderSheet = forwardRef(function ReminderSheet({ item, presentat
     closing.value = false;
     cancelAnimation(y);
     y.value = height;
+    // Reopening unchanged content needs no additional content-layout round trip.
+    const cached = visible ? layoutCache.current.get(layoutKey) : undefined;
+    if (cached !== undefined) {
+      summary.current = { id: item.id, height: cached };
+      opening.current.measured();
+    }
     return () => cancelAnimation(y);
   }, [visible]);
   useLayoutEffect(() => {
@@ -222,6 +232,8 @@ export const ReminderSheet = forwardRef(function ReminderSheet({ item, presentat
   const onContentLayout = (_w, contentHeight) => {
     if (contentHeight <= 0 || !item) return;
     summary.current = { id: item.id, height: contentHeight };
+    layoutCache.current.set(layoutKey, contentHeight);
+    if (layoutCache.current.size > 16) layoutCache.current.delete(layoutCache.current.keys().next().value);
     if (opening.current.measured()) startOpening();
   };
   const onShow = () => { if (opening.current.shown()) startOpening(); };
