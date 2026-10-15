@@ -9,12 +9,14 @@
       "distribution": "internal"
     },
     "preview": {
+      "bun": "1.4.2",
       "distribution": "internal",
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
+      "bun": "1.4.2",
       "autoIncrement": true,
       "android": {
         "buildType": "app-bundle"
