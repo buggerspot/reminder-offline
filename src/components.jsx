@@ -68,7 +68,12 @@ export const SettingsToggle = React.memo(({ value, onValueChange, label }) => {
     />
   );
 });
-export function PermissionBanner({ message, onEnable, onDismiss, actionTitle = "Enable Notifications" }) {
+export function PermissionBanner({
+  message,
+  onEnable,
+  onDismiss,
+  actionTitle = "Enable Notifications",
+}) {
   const palette = useContext(PaletteContext);
   return (
     <View
@@ -291,7 +296,14 @@ export const Chip = ({ label, active, onPress }) => {
   );
 };
 export const ReminderRow = React.memo(
-  ({ item, onOpen, onLongPress, selected, selectionMode, showStatus = false }) => {
+  ({
+    item,
+    onOpen,
+    onLongPress,
+    selected,
+    selectionMode,
+    showStatus = false,
+  }) => {
     const [imageFailed, setImageFailed] = React.useState(false);
     useEffect(() => setImageFailed(false), [item.imageUri]);
     const palette = useContext(PaletteContext);
@@ -333,7 +345,11 @@ export const ReminderRow = React.memo(
           ) : selected ? (
             <CheckCircle2 color={palette.brand} size={21} />
           ) : item.imageUri && !imageFailed ? (
-            <Image source={{ uri: item.imageUri }} onError={() => setImageFailed(true)} style={{ width: 46, height: 46, borderRadius: 15 }} />
+            <Image
+              source={{ uri: item.imageUri }}
+              onError={() => setImageFailed(true)}
+              style={{ width: 46, height: 46, borderRadius: 15 }}
+            />
           ) : (
             <CalendarDays color={palette.brand} size={21} />
           )}
@@ -370,8 +386,10 @@ export const ReminderRow = React.memo(
             <Text
               numberOfLines={1}
               style={{
-                color: showStatus && item.missed ? palette.danger : palette.muted,
-                textDecorationLine: showStatus && item.completed ? "line-through" : "none",
+                color:
+                  showStatus && item.missed ? palette.danger : palette.muted,
+                textDecorationLine:
+                  showStatus && item.completed ? "line-through" : "none",
                 fontSize: 12,
                 marginTop: 4,
               }}
@@ -396,44 +414,139 @@ export function SelectionArea({ active, actions, children }) {
   const reducedMotion = useRef(false);
   useEffect(() => {
     let mounted = true;
-    AccessibilityInfo.isReduceMotionEnabled().then(value => { if (mounted) reducedMotion.current = value; });
-    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", value => { reducedMotion.current = value; });
-    return () => { mounted = false; subscription.remove(); };
+    AccessibilityInfo.isReduceMotionEnabled().then((value) => {
+      if (mounted) reducedMotion.current = value;
+    });
+    const subscription = AccessibilityInfo.addEventListener(
+      "reduceMotionChanged",
+      (value) => {
+        reducedMotion.current = value;
+      },
+    );
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
   }, []);
   useEffect(() => {
     progress.stopAnimation();
-    Animated.timing(progress, { toValue: active ? 1 : 0, duration: reducedMotion.current ? 0 : 160, useNativeDriver: true }).start();
+    Animated.timing(progress, {
+      toValue: active ? 1 : 0,
+      duration: reducedMotion.current ? 0 : 160,
+      useNativeDriver: true,
+    }).start();
     return () => progress.stopAnimation();
   }, [active, progress]);
   const layer = { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 };
   return (
-    <View style={{ height: 48, marginBottom: 14 }}>
-      <Animated.View pointerEvents={active ? "none" : "auto"} accessibilityElementsHidden={active} importantForAccessibility={active ? "no-hide-descendants" : "auto"} style={[layer, { opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }) }]}>
+    <View style={{ height: 48, marginBottom: 6, marginTop: 6 }}>
+      <Animated.View
+        pointerEvents={active ? "none" : "auto"}
+        accessibilityElementsHidden={active}
+        importantForAccessibility={active ? "no-hide-descendants" : "auto"}
+        style={[
+          layer,
+          {
+            opacity: progress.interpolate({
+              inputRange: [0, 1],
+              outputRange: [1, 0],
+            }),
+          },
+        ]}
+      >
         {children}
       </Animated.View>
-      <Animated.View pointerEvents={active ? "auto" : "none"} accessibilityElementsHidden={!active} importantForAccessibility={active ? "auto" : "no-hide-descendants"} style={[layer, { opacity: progress }]}>
+      <Animated.View
+        pointerEvents={active ? "auto" : "none"}
+        accessibilityElementsHidden={!active}
+        importantForAccessibility={active ? "auto" : "no-hide-descendants"}
+        style={[layer, { opacity: progress }]}
+      >
         {actions}
       </Animated.View>
     </View>
   );
 }
 
-export function SelectionToolbar({ count, total, onSelectAll, onDelete, onCancel, onComplete }) {
+export function SelectionToolbar({
+  count,
+  total,
+  onSelectAll,
+  onDelete,
+  onCancel,
+  onComplete,
+}) {
   const palette = useContext(PaletteContext);
-  const actionStyle = { flex: 1, minWidth: 0, height: 46, alignItems: "center", justifyContent: "center", paddingHorizontal: 2 };
-  const textStyle = { fontSize: 12, lineHeight: 15, fontWeight: "700", textAlign: "center" };
+  const actionStyle = {
+    flex: 1,
+    minWidth: 0,
+    height: 46,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 2,
+  };
+  const textStyle = {
+    fontSize: 12,
+    lineHeight: 15,
+    fontWeight: "700",
+    textAlign: "center",
+  };
   return (
-    <View style={{ height: 48, borderRadius: 14, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.card, flexDirection: "row", alignItems: "center", paddingHorizontal: 4 }}>
-      <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: count > 0 && count === total }} onPress={onSelectAll} style={actionStyle}>
-        <Text style={[textStyle, { color: palette.brand }]}>{count === total && total > 0 ? "Deselect all" : "Select all"} ({count})</Text>
+    <View
+      style={{
+        height: 48,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: palette.border,
+        backgroundColor: palette.card,
+        flexDirection: "row",
+        alignItems: "center",
+        paddingHorizontal: 4,
+      }}
+    >
+      <Pressable
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked: count > 0 && count === total }}
+        onPress={onSelectAll}
+        style={actionStyle}
+      >
+        <Text style={[textStyle, { color: palette.brand }]}>
+          {count === total && total > 0 ? "Deselect all" : "Select all"} (
+          {count})
+        </Text>
       </Pressable>
-      {onComplete && <Pressable accessibilityRole="button" accessibilityLabel="Complete selected reminders" disabled={!count} onPress={onComplete} style={actionStyle}>
-        <Text style={[textStyle, { color: count ? palette.brand : palette.muted }]}>Complete</Text>
-      </Pressable>}
-      <Pressable accessibilityRole="button" accessibilityLabel="Delete selected reminders" disabled={!count} onPress={onDelete} style={actionStyle}>
+      {onComplete && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Complete selected reminders"
+          disabled={!count}
+          onPress={onComplete}
+          style={actionStyle}
+        >
+          <Text
+            style={[
+              textStyle,
+              { color: count ? palette.brand : palette.muted },
+            ]}
+          >
+            Complete
+          </Text>
+        </Pressable>
+      )}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Delete selected reminders"
+        disabled={!count}
+        onPress={onDelete}
+        style={actionStyle}
+      >
         <Trash2 size={21} color={count ? palette.danger : palette.muted} />
       </Pressable>
-      <Pressable accessibilityRole="button" onPress={onCancel} style={actionStyle}>
+      <Pressable
+        accessibilityRole="button"
+        onPress={onCancel}
+        style={actionStyle}
+      >
         <Text style={[textStyle, { color: palette.text }]}>Cancel</Text>
       </Pressable>
     </View>
@@ -519,13 +632,46 @@ export function SelectedDateText({ date, label, palette, style }) {
       if (cancelled || reduced || !date) return;
       tilt.setValue(0);
       Animated.sequence([
-        Animated.timing(tilt, { toValue: 1, duration: 100, useNativeDriver: true }),
-        Animated.timing(tilt, { toValue: 0, duration: 180, useNativeDriver: true }),
+        Animated.timing(tilt, {
+          toValue: 1,
+          duration: 100,
+          useNativeDriver: true,
+        }),
+        Animated.timing(tilt, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: true,
+        }),
       ]).start();
     });
-    return () => { cancelled = true; tilt.stopAnimation(); };
+    return () => {
+      cancelled = true;
+      tilt.stopAnimation();
+    };
   }, [date, tilt]);
-  return <Animated.Text style={[{ color: palette.text, fontSize: 19, fontWeight: "800", marginVertical: 16, transform: [{ rotate: tilt.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "-2deg"] }) }] }, style]}>{label}</Animated.Text>;
+  return (
+    <Animated.Text
+      style={[
+        {
+          color: palette.text,
+          fontSize: 19,
+          fontWeight: "800",
+          marginVertical: 16,
+          transform: [
+            {
+              rotate: tilt.interpolate({
+                inputRange: [0, 1],
+                outputRange: ["0deg", "-2deg"],
+              }),
+            },
+          ],
+        },
+        style,
+      ]}
+    >
+      {label}
+    </Animated.Text>
+  );
 }
 
 export function ReminderImagePreview({ uri }) {
@@ -536,13 +682,38 @@ export function ReminderImagePreview({ uri }) {
     let active = true;
     setSize(null);
     setFailed(false);
-    Image.getSize(uri, (w, h) => { if (active) setSize({ width: w, height: h }); }, () => { if (active) setFailed(true); });
-    return () => { active = false; };
+    Image.getSize(
+      uri,
+      (w, h) => {
+        if (active) setSize({ width: w, height: h });
+      },
+      () => {
+        if (active) setFailed(true);
+      },
+    );
+    return () => {
+      active = false;
+    };
   }, [uri]);
   if (failed) return <Text style={{ color: "white" }}>Image unavailable</Text>;
   if (!size) return null;
-  const scale = Math.min((width - 48) / size.width, (height * 0.75) / size.height);
-  return <Pressable accessibilityLabel="Reminder image" onPress={() => {}}>
-    <Image source={{ uri }} accessibilityLabel="Reminder image" resizeMode="contain" onError={() => setFailed(true)} style={{ width: size.width * scale, height: size.height * scale, borderRadius: 14 }} />
-  </Pressable>;
+  const scale = Math.min(
+    (width - 48) / size.width,
+    (height * 0.75) / size.height,
+  );
+  return (
+    <Pressable accessibilityLabel="Reminder image" onPress={() => {}}>
+      <Image
+        source={{ uri }}
+        accessibilityLabel="Reminder image"
+        resizeMode="contain"
+        onError={() => setFailed(true)}
+        style={{
+          width: size.width * scale,
+          height: size.height * scale,
+          borderRadius: 14,
+        }}
+      />
+    </Pressable>
+  );
 }

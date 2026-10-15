@@ -66,8 +66,15 @@ import {
 import { cleanupCompleted } from "./src/lib/retention";
 import { reminderCategories } from "./src/lib/categories";
 import { importReminderImage } from "./src/lib/images";
-import { completeSelectedOccurrences, deleteSelected } from "./src/lib/selection";
-import { exportJSON, importReminders, newReminders } from "./src/lib/exportImport";
+import {
+  completeSelectedOccurrences,
+  deleteSelected,
+} from "./src/lib/selection";
+import {
+  exportJSON,
+  importReminders,
+  newReminders,
+} from "./src/lib/exportImport";
 import {
   occursOn,
   calendarOccurrences,
@@ -147,7 +154,10 @@ export default function App() {
   const [detail, setDetail] = useState(null);
   const [imagePreview, setImagePreview] = useState(false);
   const [detailImageFailed, setDetailImageFailed] = useState(false);
-  useEffect(() => { setImagePreview(false); setDetailImageFailed(false); }, [detail?.id, detail?.imageUri]);
+  useEffect(() => {
+    setImagePreview(false);
+    setDetailImageFailed(false);
+  }, [detail?.id, detail?.imageUri]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     title: "",
@@ -190,15 +200,29 @@ export default function App() {
   const [dialog, setDialog] = useState(null);
   const dialogQueue = useRef([]);
   const dialogOpen = useRef(false);
-  const Alert = useMemo(() => ({ alert: (title, message, buttons) => {
-    const next = { title, message, buttons };
-    if (dialogOpen.current) dialogQueue.current.push(next);
-    else { dialogOpen.current = true; setDialog(next); }
-  } }), []);
-  const closeDialog = () => { const next = dialogQueue.current.shift() || null; dialogOpen.current = !!next; setDialog(next); };
+  const Alert = useMemo(
+    () => ({
+      alert: (title, message, buttons) => {
+        const next = { title, message, buttons };
+        if (dialogOpen.current) dialogQueue.current.push(next);
+        else {
+          dialogOpen.current = true;
+          setDialog(next);
+        }
+      },
+    }),
+    [],
+  );
+  const closeDialog = () => {
+    const next = dialogQueue.current.shift() || null;
+    dialogOpen.current = !!next;
+    setDialog(next);
+  };
   const selectionMode = selectedIds.length > 0;
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
-  useEffect(() => { setSelectedIds([]); }, [tab, filter, selectedDate, search]);
+  useEffect(() => {
+    setSelectedIds([]);
+  }, [tab, filter, selectedDate, search]);
   const isDark = settings.theme === "dark";
   const palette = useMemo(
     () =>
@@ -230,9 +254,7 @@ export default function App() {
     [isDark],
   );
   useEffect(() => {
-    Appearance.setColorScheme(
-      settings.theme,
-    );
+    Appearance.setColorScheme(settings.theme);
   }, [settings.theme]);
   useEffect(() => {
     (async () => {
@@ -276,7 +298,12 @@ export default function App() {
                 ? r.repeat && r.repeat !== "none"
                   ? {
                       ...r,
-                      completedDateTimes: { ...r.completedDateTimes, ...Object.fromEntries(dates.map((date) => [date, new Date().toISOString()])) },
+                      completedDateTimes: {
+                        ...r.completedDateTimes,
+                        ...Object.fromEntries(
+                          dates.map((date) => [date, new Date().toISOString()]),
+                        ),
+                      },
                       completedDates: [
                         ...new Set([...(r.completedDates || []), ...dates]),
                       ],
@@ -385,8 +412,12 @@ export default function App() {
     // Update the ref immediately so foreground refresh uses the same snapshot.
     reminderRef.current = retained;
     setReminders(retained);
-    setSelectedIds((ids) => ids.filter((id) => retained.some((r) => r.id === id)));
-    setDetail((item) => item && !retained.some((r) => r.id === item.id) ? null : item);
+    setSelectedIds((ids) =>
+      ids.filter((id) => retained.some((r) => r.id === id)),
+    );
+    setDetail((item) =>
+      item && !retained.some((r) => r.id === item.id) ? null : item,
+    );
     saveReminders(retained).catch((e) => {
       console.warn("Completed reminder cleanup", e);
       // Retry on the next clock tick if persistence failed.
@@ -411,7 +442,10 @@ export default function App() {
           r.id === id
             ? {
                 ...r,
-                completedDateTimes: { ...r.completedDateTimes, [occurrenceDate]: new Date().toISOString() },
+                completedDateTimes: {
+                  ...r.completedDateTimes,
+                  [occurrenceDate]: new Date().toISOString(),
+                },
                 completedDates: [
                   ...new Set([...(r.completedDates || []), occurrenceDate]),
                 ],
@@ -479,7 +513,8 @@ export default function App() {
       ...settingsRef.current,
       ...patch,
     };
-    if ("theme" in patch) LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    if ("theme" in patch)
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     settingsRef.current = next;
     setSettings(next);
     if ("soundEnabled" in patch)
@@ -677,7 +712,11 @@ export default function App() {
           onPress: async () => {
             try {
               const deletedIds = new Set(ids);
-              const next = deleteSelected(reminderRef.current, deletedIds, tab === "Home" ? filter : "Calendar");
+              const next = deleteSelected(
+                reminderRef.current,
+                deletedIds,
+                tab === "Home" ? filter : "Calendar",
+              );
               for (const r of reminders.filter((r) => deletedIds.has(r.id))) {
                 await NativeModules.ReminderNative?.clearNotification?.(r.id);
                 await cancelReminderNotification(r.notificationId);
@@ -685,7 +724,6 @@ export default function App() {
               await saveReminders(next);
               setReminders(next);
               setSelectedIds([]);
-
             } catch (e) {
               Alert.alert("Delete failed", e.message);
             }
@@ -693,38 +731,62 @@ export default function App() {
         },
       ],
     );
-  const categoryRows = useMemo(() => reminderCategories(reminders, new Date(clock)), [reminders, clock]);
+  const categoryRows = useMemo(
+    () => reminderCategories(reminders, new Date(clock)),
+    [reminders, clock],
+  );
   const tabRows = categoryRows[filter];
   const visible = useMemo(() => {
     const query = deferredSearch.trim().toLowerCase();
-    return query ? tabRows.filter((r) => (r.title + " " + (r.description || "")).toLowerCase().includes(query)) : tabRows;
+    return query
+      ? tabRows.filter((r) =>
+          (r.title + " " + (r.description || "")).toLowerCase().includes(query),
+        )
+      : tabRows;
   }, [tabRows, deferredSearch]);
   const completeSelected = async () => {
-    const rows = new Map(visible.filter(r => selectedSet.has(r.id)).map(r => [r.id, r]));
+    const rows = new Map(
+      visible.filter((r) => selectedSet.has(r.id)).map((r) => [r.id, r]),
+    );
     if (!rows.size) return;
     try {
       const completedAt = new Date().toISOString();
       const current = reminderRef.current;
-      const updated = completeSelectedOccurrences(current, [...rows.values()], completedAt);
+      const updated = completeSelectedOccurrences(
+        current,
+        [...rows.values()],
+        completedAt,
+      );
       for (let i = 0; i < current.length; i++) {
         if (current[i] === updated[i]) continue;
         await NativeModules.ReminderNative?.clearNotification?.(current[i].id);
         await cancelReminderNotification(current[i].notificationId);
-        updated[i].notificationId = await scheduleReminder(updated[i], settings.soundEnabled);
+        updated[i].notificationId = await scheduleReminder(
+          updated[i],
+          settings.soundEnabled,
+        );
       }
       await saveReminders(updated);
       setReminders(updated);
 
       setSelectedIds([]);
-    } catch (e) { Alert.alert("Could not complete reminders", e.message); }
+    } catch (e) {
+      Alert.alert("Could not complete reminders", e.message);
+    }
   };
   const calendarRows = useMemo(
     () => calendarOccurrences(reminders, selectedDate, clock),
     [reminders, selectedDate, clock],
   );
   useEffect(() => {
-    const available = new Set((tab === "Calendar" ? calendarRows : visible).map(r => r.id));
-    setSelectedIds(ids => ids.every(id => available.has(id)) ? ids : ids.filter(id => available.has(id)));
+    const available = new Set(
+      (tab === "Calendar" ? calendarRows : visible).map((r) => r.id),
+    );
+    setSelectedIds((ids) =>
+      ids.every((id) => available.has(id))
+        ? ids
+        : ids.filter((id) => available.has(id)),
+    );
   }, [tab, calendarRows, visible]);
   const calendarDays = useMemo(() => {
     const year = calendarMonth.getFullYear(),
@@ -742,7 +804,12 @@ export default function App() {
     () =>
       new Set(
         calendarDays.filter(
-          (date) => date && reminders.some((r) => occursOn(r, date) && +new Date(`${date}T${r.time}:00`) >= clock),
+          (date) =>
+            date &&
+            reminders.some(
+              (r) =>
+                occursOn(r, date) && +new Date(`${date}T${r.time}:00`) >= clock,
+            ),
         ),
       ),
     [calendarDays, reminders, clock],
@@ -756,23 +823,31 @@ export default function App() {
     try {
       const imported = await importReminders();
       if (!imported) return;
-      const valid = newReminders(reminderRef.current, imported)
-        .map((r) => ({
-          ...r,
-          id: r.id || makeId(),
-          notificationId: null,
-          soundId: sounds.some((s) => s.id === r.soundId) ? r.soundId : null,
-          soundUri: sounds.find((s) => s.id === r.soundId)?.uri || null,
-        }));
+      const valid = newReminders(reminderRef.current, imported).map((r) => ({
+        ...r,
+        id: r.id || makeId(),
+        notificationId: null,
+        soundId: sounds.some((s) => s.id === r.soundId) ? r.soundId : null,
+        soundUri: sounds.find((s) => s.id === r.soundId)?.uri || null,
+      }));
       const skipped = imported.length - valid.length;
-      if (!valid.length) return Alert.alert("Nothing new to import", imported.length ? "All reminders are already imported. Nothing new to import." : "No reminders available to import.");
+      if (!valid.length)
+        return Alert.alert(
+          "Nothing new to import",
+          imported.length
+            ? "All reminders are already imported. Nothing new to import."
+            : "No reminders available to import.",
+        );
       const combined = [...reminders, ...valid];
       if (Platform.OS !== "android")
         for (const r of valid)
           r.notificationId = await scheduleReminder(r, settings.soundEnabled);
       await saveReminders(combined);
       setReminders(combined);
-      Alert.alert("Import complete", `${valid.length} reminders imported. ${skipped} skipped as duplicates.`);
+      Alert.alert(
+        "Import complete",
+        `${valid.length} reminders imported. ${skipped} skipped as duplicates.`,
+      );
     } catch (e) {
       Alert.alert(
         "Import failed",
@@ -781,7 +856,11 @@ export default function App() {
     }
   };
   const exportWith = async (type) => {
-    if (!reminders.length) return Alert.alert("Nothing to export", "No reminders available to export.");
+    if (!reminders.length)
+      return Alert.alert(
+        "Nothing to export",
+        "No reminders available to export.",
+      );
     try {
       const result = await exportJSON(reminders, type);
       if (!result || type !== "download") return;
@@ -880,8 +959,14 @@ export default function App() {
         <ExpoStatusBar style={isDark ? "light" : "dark"} />
         {(!permission || alarmStatus?.exact === false) && !bannerDismissed && (
           <PermissionBanner
-            message={!permission ? "Enable notifications to receive your reminders on time." : "Enable precise alarms for reminders to trigger on time. Without this setting, reminders may be slightly delayed."}
-            actionTitle={!permission ? "Enable Notifications" : "Enable precise timing"}
+            message={
+              !permission
+                ? "Enable notifications to receive your reminders on time."
+                : "Enable precise alarms for reminders to trigger on time. Without this setting, reminders may be slightly delayed."
+            }
+            actionTitle={
+              !permission ? "Enable Notifications" : "Enable precise timing"
+            }
             onDismiss={() => setBannerDismissed(true)}
             onEnable={async () => {
               try {
@@ -906,185 +991,298 @@ export default function App() {
         >
           {tab === "Home" && (
             <FlatList
-              data={[{id: "header", header: true}, {id: "controls", controls: true}, ...visible]}
+              data={[
+                { id: "header", header: true },
+                { id: "controls", controls: true },
+                ...visible,
+              ]}
               stickyHeaderIndices={[1]}
-              keyExtractor={(item) => item.header ? "list-header" : item.controls ? "list-controls" : `reminder:${item.id}`}
-              renderItem={({ item }) => item.header ? (<View>
-
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: 22,
-                    }}
-                  >
-                    <View>
-                      <Text
-                        style={{
-                          color: palette.muted,
-                          fontSize: 13,
-                        }}
-                      >
-                        YOUR PERSONAL ASSISTANT
-                      </Text>
-                      <Text
-                        style={{
-                          color: palette.text,
-                          fontSize: 28,
-                          fontWeight: "800",
-                          marginTop: 3,
-                        }}
-                      >
-                        Make time matter.
-                      </Text>
-                    </View>
-                    <Pressable
-                      onPress={() => setTab("Settings")}
-                      style={{
-                        width: 44,
-                        height: 44,
-                        borderRadius: 15,
-                        backgroundColor: palette.card,
-                        borderColor: palette.border,
-                        borderWidth: 1,
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      <SettingsIcon color={palette.text} />
-                    </Pressable>
-                  </View>
-                  <View
-                    style={{
-                      backgroundColor: C.brand,
-                      borderRadius: 24,
-                      padding: 20,
-                      marginBottom: 22,
-                      overflow: "hidden",
-                    }}
-                  >
+              keyExtractor={(item) =>
+                item.header
+                  ? "list-header"
+                  : item.controls
+                    ? "list-controls"
+                    : `reminder:${item.id}`
+              }
+              renderItem={({ item }) =>
+                item.header ? (
+                  <View>
                     <View
                       style={{
                         flexDirection: "row",
                         alignItems: "center",
                         justifyContent: "space-between",
+                        marginBottom: 22,
+                      }}
+                    >
+                      <View>
+                        <Text
+                          style={{
+                            color: palette.muted,
+                            fontSize: 13,
+                          }}
+                        >
+                          YOUR PERSONAL ASSISTANT
+                        </Text>
+                        <Text
+                          style={{
+                            color: palette.text,
+                            fontSize: 28,
+                            fontWeight: "800",
+                            marginTop: 3,
+                          }}
+                        >
+                          Make time matter.
+                        </Text>
+                      </View>
+                      <Pressable
+                        onPress={() => setTab("Settings")}
+                        style={{
+                          width: 44,
+                          height: 44,
+                          borderRadius: 15,
+                          backgroundColor: palette.card,
+                          borderColor: palette.border,
+                          borderWidth: 1,
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        <SettingsIcon color={palette.text} />
+                      </Pressable>
+                    </View>
+                    <View
+                      style={{
+                        backgroundColor: C.brand,
+                        borderRadius: 24,
+                        padding: 20,
+                        marginBottom: 22,
+                        overflow: "hidden",
                       }}
                     >
                       <View
                         style={{
-                          flex: 1,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          justifyContent: "space-between",
                         }}
                       >
-                        <Text
+                        <View
                           style={{
-                            color: "#CCFBF1",
-                            fontSize: 12,
-                            fontWeight: "700",
+                            flex: 1,
                           }}
                         >
-                          A LITTLE MORE PEACE OF MIND
-                        </Text>
-                        <Text
-                          style={{
-                            color: "#FFFFFF",
-                            fontSize: 23,
-                            fontWeight: "800",
-                            marginTop: 8,
-                          }}
-                        >
-                          Remember what matters.
-                        </Text>
-                        <Text
-                          style={{
-                            color: "#D1FAE5",
-                            fontSize: 13,
-                            marginTop: 7,
-                            lineHeight: 19,
-                          }}
-                        >
-                          Big moments, tiny tasks — let us keep track.
-                        </Text>
+                          <Text
+                            style={{
+                              color: "#CCFBF1",
+                              fontSize: 12,
+                              fontWeight: "700",
+                            }}
+                          >
+                            A LITTLE MORE PEACE OF MIND
+                          </Text>
+                          <Text
+                            style={{
+                              color: "#FFFFFF",
+                              fontSize: 23,
+                              fontWeight: "800",
+                              marginTop: 8,
+                            }}
+                          >
+                            Remember what matters.
+                          </Text>
+                          <Text
+                            style={{
+                              color: "#D1FAE5",
+                              fontSize: 13,
+                              marginTop: 7,
+                              lineHeight: 19,
+                            }}
+                          >
+                            Big moments, tiny tasks — let us keep track.
+                          </Text>
+                        </View>
+                        <Bell color="#D1FAE5" size={50} />
                       </View>
-                      <Bell color="#D1FAE5" size={50} />
+                      <Pressable
+                        onPress={openNew}
+                        style={{
+                          backgroundColor: "#FFFFFF",
+                          borderRadius: 13,
+                          paddingVertical: 12,
+                          paddingHorizontal: 14,
+                          alignSelf: "flex-start",
+                          marginTop: 18,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <Plus color={C.brand} size={18} />
+                        <Text
+                          style={{
+                            color: C.brand,
+                            fontWeight: "800",
+                          }}
+                        >
+                          Create reminder
+                        </Text>
+                      </Pressable>
                     </View>
-                    <Pressable
-                      onPress={openNew}
+
+                    <View
                       style={{
-                        backgroundColor: "#FFFFFF",
-                        borderRadius: 13,
-                        paddingVertical: 12,
-                        paddingHorizontal: 14,
-                        alignSelf: "flex-start",
-                        marginTop: 18,
                         flexDirection: "row",
                         alignItems: "center",
-                        gap: 8,
+                        justifyContent: "space-between",
+                        marginBottom: 13,
                       }}
                     >
-                      <Plus color={C.brand} size={18} />
                       <Text
                         style={{
-                          color: C.brand,
+                          color: palette.text,
+                          fontSize: 19,
                           fontWeight: "800",
                         }}
                       >
-                        Create reminder
+                        Your reminders
                       </Text>
-                    </Pressable>
-                  </View>
-
-                  <View style={{flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 13}}><Text style={{color: palette.text, fontSize: 19, fontWeight: "800"}}>Your reminders</Text><Pressable onPress={() => setTab("Calendar")}><Text style={{color: palette.brand, fontWeight: "700"}}>View calendar</Text></Pressable></View>
-                </View>) : item.controls ? (<View style={{ backgroundColor: palette.bg, paddingTop: 8 }}>
-                  <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>{["Upcoming", "Completed", "Missed"].map(category => <Pressable key={category} accessibilityRole="tab" accessibilityState={{selected: filter === category}} onPress={() => setFilter(category)} style={{flex: 1, backgroundColor: filter === category ? palette.brand : palette.card, borderColor: filter === category ? palette.brand : palette.border, borderWidth: 1, borderRadius: 17, padding: 12}}>
-                  <Text style={{color: filter === category ? palette.onBrand : palette.text, fontSize: 23, fontWeight: "800"}}>{categoryRows[category].length}</Text>
-                  <Text style={{color: filter === category ? palette.onBrand : palette.muted, fontSize: 11, marginTop: 3}}>{category}</Text>
-                  </Pressable>)}</View>
-                  <SelectionArea active={selectionMode} actions={<SelectionToolbar count={selectedIds.length} total={visible.length} onSelectAll={() => setSelectedIds(selectedIds.length === visible.length ? [] : visible.map(r => r.id))} onCancel={() => {setSelectedIds([]);}} onDelete={() => deleteMany(visible.filter(r => selectedSet.has(r.id)).map(r => r.id))} onComplete={filter === "Upcoming" ? completeSelected : undefined} />}>
-
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      backgroundColor: palette.card,
-                      borderWidth: 1,
-                      borderColor: palette.border,
-                      borderRadius: 14,
-                      paddingHorizontal: 12,
-                      height: 48,
-                    }}
-                  >
-                    <Search color={palette.muted} size={18} />
-                    <TextInput
-                      editable={!selectionMode}
-                      value={search}
-                      onChangeText={setSearch}
-                      placeholder="Search reminders"
-                      placeholderTextColor={palette.muted}
-                      style={{
-                        flex: 1,
-                        padding: 12,
-                        color: palette.text,
-                      }}
-                    />
-                    {search ? (
-                      <Pressable onPress={() => setSearch("")}>
-                        <X size={16} color={palette.muted} />
+                      <Pressable onPress={() => setTab("Calendar")}>
+                        <Text
+                          style={{ color: palette.brand, fontWeight: "700" }}
+                        >
+                          View calendar
+                        </Text>
                       </Pressable>
-                    ) : null}
+                    </View>
                   </View>
-                  </SelectionArea>
-                  </View>) : (
-                <ReminderRow
-                  item={item}
-                  selected={selectedSet.has(item.id)}
-                  selectionMode={selectionMode}
-                  onLongPress={() => toggleSelection(item.id)}
-                  onOpen={(r) =>
-                    selectionMode ? toggleSelection(r.id) : openReminder(r)
-                  }
-                />
-              )}
+                ) : item.controls ? (
+                  <View style={{ backgroundColor: palette.bg, paddingTop: 8 }}>
+                    <View
+                      style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}
+                    >
+                      {["Upcoming", "Completed", "Missed"].map((category) => (
+                        <Pressable
+                          key={category}
+                          accessibilityRole="tab"
+                          accessibilityState={{ selected: filter === category }}
+                          onPress={() => setFilter(category)}
+                          style={{
+                            flex: 1,
+                            backgroundColor:
+                              filter === category
+                                ? palette.brand
+                                : palette.card,
+                            borderColor:
+                              filter === category
+                                ? palette.brand
+                                : palette.border,
+                            borderWidth: 1,
+                            borderRadius: 17,
+                            padding: 12,
+                          }}
+                        >
+                          <Text
+                            style={{
+                              color:
+                                filter === category
+                                  ? palette.onBrand
+                                  : palette.text,
+                              fontSize: 23,
+                              fontWeight: "800",
+                            }}
+                          >
+                            {categoryRows[category].length}
+                          </Text>
+                          <Text
+                            style={{
+                              color:
+                                filter === category
+                                  ? palette.onBrand
+                                  : palette.muted,
+                              fontSize: 11,
+                              marginTop: 3,
+                            }}
+                          >
+                            {category}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                    <SelectionArea
+                      active={selectionMode}
+                      actions={
+                        <SelectionToolbar
+                          count={selectedIds.length}
+                          total={visible.length}
+                          onSelectAll={() =>
+                            setSelectedIds(
+                              selectedIds.length === visible.length
+                                ? []
+                                : visible.map((r) => r.id),
+                            )
+                          }
+                          onCancel={() => {
+                            setSelectedIds([]);
+                          }}
+                          onDelete={() =>
+                            deleteMany(
+                              visible
+                                .filter((r) => selectedSet.has(r.id))
+                                .map((r) => r.id),
+                            )
+                          }
+                          onComplete={
+                            filter === "Upcoming" ? completeSelected : undefined
+                          }
+                        />
+                      }
+                    >
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          backgroundColor: palette.card,
+                          borderWidth: 1,
+                          borderColor: palette.border,
+                          borderRadius: 14,
+                          paddingHorizontal: 12,
+                          height: 48,
+                        }}
+                      >
+                        <Search color={palette.muted} size={18} />
+                        <TextInput
+                          editable={!selectionMode}
+                          value={search}
+                          onChangeText={setSearch}
+                          placeholder="Search reminders"
+                          placeholderTextColor={palette.muted}
+                          style={{
+                            flex: 1,
+                            padding: 12,
+                            color: palette.text,
+                          }}
+                        />
+                        {search ? (
+                          <Pressable onPress={() => setSearch("")}>
+                            <X size={16} color={palette.muted} />
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    </SelectionArea>
+                  </View>
+                ) : (
+                  <ReminderRow
+                    item={item}
+                    selected={selectedSet.has(item.id)}
+                    selectionMode={selectionMode}
+                    onLongPress={() => toggleSelection(item.id)}
+                    onOpen={(r) =>
+                      selectionMode ? toggleSelection(r.id) : openReminder(r)
+                    }
+                  />
+                )
+              }
               initialNumToRender={12}
               maxToRenderPerBatch={12}
               windowSize={7}
@@ -1093,259 +1291,310 @@ export default function App() {
                 padding: 20,
                 paddingBottom: 110,
               }}
-
-              ListFooterComponent={visible.length ? null :
-                <Card>
-                  <View
-                    style={{
-                      alignItems: "center",
-                      paddingVertical: 20,
-                    }}
-                  >
-                    <CalendarDays color={palette.brand} size={34} />
-                    <Text
-                      style={{
-                        color: palette.text,
-                        fontWeight: "800",
-                        fontSize: 16,
-                        marginTop: 12,
-                      }}
-                    >
-                      {reminders.length ? `No ${filter.toLowerCase()} reminders.` : "A little room to breathe"}
-                    </Text>
-                    <Text
-                      style={{
-                        color: palette.muted,
-                        textAlign: "center",
-                        marginTop: 6,
-                        lineHeight: 20,
-                      }}
-                    >
-                      {reminders.length ? (search ? "Try another search." : "Your reminders will appear here.") : "No reminders here yet. Add one now and let your mind focus on what matters."}
-                    </Text>
+              ListFooterComponent={
+                visible.length ? null : (
+                  <Card>
                     <View
                       style={{
-                        marginTop: 16,
-                        width: "100%",
+                        alignItems: "center",
+                        paddingVertical: 20,
                       }}
                     >
-                      <Btn
-                        title={reminders.length ? "Add reminder" : "Add your first reminder"}
-                        onPress={openNew}
-                        icon={<Plus color="white" size={18} />}
-                      />
+                      <CalendarDays color={palette.brand} size={34} />
+                      <Text
+                        style={{
+                          color: palette.text,
+                          fontWeight: "800",
+                          fontSize: 16,
+                          marginTop: 12,
+                        }}
+                      >
+                        {reminders.length
+                          ? `No ${filter.toLowerCase()} reminders.`
+                          : "A little room to breathe"}
+                      </Text>
+                      <Text
+                        style={{
+                          color: palette.muted,
+                          textAlign: "center",
+                          marginTop: 6,
+                          lineHeight: 20,
+                        }}
+                      >
+                        {reminders.length
+                          ? search
+                            ? "Try another search."
+                            : "Your reminders will appear here."
+                          : "No reminders here yet. Add one now and let your mind focus on what matters."}
+                      </Text>
+                      <View
+                        style={{
+                          marginTop: 16,
+                          width: "100%",
+                        }}
+                      >
+                        <Btn
+                          title={
+                            reminders.length
+                              ? "Add reminder"
+                              : "Add your first reminder"
+                          }
+                          onPress={openNew}
+                          icon={<Plus color="white" size={18} />}
+                        />
+                      </View>
                     </View>
-                  </View>
-                </Card>
+                  </Card>
+                )
               }
             />
           )}
 
           {tab === "Calendar" && (
-            <View style={{flex: 1}}>
-            <FlatList
-              data={calendarRows}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <ReminderRow
-                  item={item}
-                  showStatus
-                  selected={selectedSet.has(item.id)}
-                  selectionMode={selectionMode}
-                  onLongPress={() => toggleSelection(item.id)}
-                  onOpen={(r) =>
-                    selectionMode ? toggleSelection(r.id) : openReminder(r)
-                  }
-                />
-              )}
-              initialNumToRender={12}
-              maxToRenderPerBatch={12}
-              windowSize={7}
-              contentContainerStyle={{
-                padding: 20,
-                paddingBottom: 110,
-              }}
-              ListHeaderComponent={
-                <View>
-
-                  <Text
-                    style={{
-                      color: palette.text,
-                      fontSize: 28,
-                      fontWeight: "800",
-                      marginBottom: 20,
-                    }}
-                  >
-                    Your calendar
-                  </Text>
-                  <Card>
-                    <View
+            <View style={{ flex: 1 }}>
+              <FlatList
+                data={calendarRows}
+                keyExtractor={(item) => item.id}
+                renderItem={({ item }) => (
+                  <ReminderRow
+                    item={item}
+                    showStatus
+                    selected={selectedSet.has(item.id)}
+                    selectionMode={selectionMode}
+                    onLongPress={() => toggleSelection(item.id)}
+                    onOpen={(r) =>
+                      selectionMode ? toggleSelection(r.id) : openReminder(r)
+                    }
+                  />
+                )}
+                initialNumToRender={12}
+                maxToRenderPerBatch={12}
+                windowSize={7}
+                contentContainerStyle={{
+                  padding: 20,
+                  paddingBottom: 110,
+                }}
+                ListHeaderComponent={
+                  <View>
+                    <Text
                       style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "space-between",
+                        color: palette.text,
+                        fontSize: 28,
+                        fontWeight: "800",
+                        marginBottom: 20,
                       }}
                     >
-                      <Pressable
-                        accessibilityLabel="Previous month"
-                        onPress={() => moveMonth(-1)}
-                        hitSlop={12}
-                      >
-                        <ChevronLeft color={palette.brand} />
-                      </Pressable>
-                      <Text
+                      Your calendar
+                    </Text>
+                    <Card>
+                      <View
                         style={{
-                          color: palette.text,
-                          fontSize: 18,
-                          fontWeight: "800",
+                          flexDirection: "row",
+                          alignItems: "center",
+                          justifyContent: "space-between",
                         }}
                       >
-                        {calendarMonth.toLocaleDateString(undefined, {
-                          month: "long",
-                          year: "numeric",
-                        })}
-                      </Text>
-                      <Pressable
-                        accessibilityLabel="Next month"
-                        onPress={() => moveMonth(1)}
-                        hitSlop={12}
-                      >
-                        <ChevronRight color={palette.brand} />
-                      </Pressable>
-                    </View>
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        flexWrap: "wrap",
-                        gap: 8,
-                        justifyContent: "space-between",
-                        marginVertical: 14,
-                      }}
-                    >
-                      <Chip
-                        label="Previous year"
-                        onPress={() => moveMonth(-12)}
-                      />
-                      <Chip
-                        label="Today"
-                        onPress={() => {
-                          setCalendarMonth(new Date());
-                          setSelectedDate(todayISO());
-                          setDateChosen(true);
-                        }}
-                      />
-                      <Chip label="Next year" onPress={() => moveMonth(12)} />
-                    </View>
-                    <View
-                      style={{
-                        flexDirection: "row",
-                      }}
-                    >
-                      {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
-                        (day) => (
-                          <Text
-                            key={day}
-                            style={{
-                              width: "14.28%",
-                              textAlign: "center",
-                              color: palette.muted,
-                              fontSize: 11,
-                            }}
-                          >
-                            {day}
-                          </Text>
-                        ),
-                      )}
-                    </View>
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        flexWrap: "wrap",
-                      }}
-                    >
-                      {calendarDays.map((date, i) => (
                         <Pressable
-                          key={date || i}
-                          disabled={!date}
-                          accessibilityRole="button"
-                          accessibilityLabel={date || undefined}
-                          accessibilityState={{
-                            selected: date === selectedDate,
-                          }}
-                          onPress={() => { setSelectedDate(date); setDateChosen(true); }}
+                          accessibilityLabel="Previous month"
+                          onPress={() => moveMonth(-1)}
+                          hitSlop={12}
+                        >
+                          <ChevronLeft color={palette.brand} />
+                        </Pressable>
+                        <Text
                           style={{
-                            width: "14.28%",
-                            alignItems: "center",
-                            paddingVertical: 8,
+                            color: palette.text,
+                            fontSize: 18,
+                            fontWeight: "800",
                           }}
                         >
-                          <View
-                            style={{
-                              width: 34,
-                              height: 34,
-                              borderRadius: 17,
-                              alignItems: "center",
-                              justifyContent: "center",
-                              backgroundColor:
-                                date === selectedDate
-                                  ? palette.brand
-                                  : "transparent",
-                            }}
-                          >
+                          {calendarMonth.toLocaleDateString(undefined, {
+                            month: "long",
+                            year: "numeric",
+                          })}
+                        </Text>
+                        <Pressable
+                          accessibilityLabel="Next month"
+                          onPress={() => moveMonth(1)}
+                          hitSlop={12}
+                        >
+                          <ChevronRight color={palette.brand} />
+                        </Pressable>
+                      </View>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          flexWrap: "wrap",
+                          gap: 8,
+                          justifyContent: "space-between",
+                          marginVertical: 14,
+                        }}
+                      >
+                        <Chip
+                          label="Previous year"
+                          onPress={() => moveMonth(-12)}
+                        />
+                        <Chip
+                          label="Today"
+                          onPress={() => {
+                            setCalendarMonth(new Date());
+                            setSelectedDate(todayISO());
+                            setDateChosen(true);
+                          }}
+                        />
+                        <Chip label="Next year" onPress={() => moveMonth(12)} />
+                      </View>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                        }}
+                      >
+                        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
+                          (day) => (
                             <Text
+                              key={day}
                               style={{
-                                color:
-                                  date === selectedDate
-                                    ? palette.onBrand
-                                    : palette.text,
+                                width: "14.28%",
+                                textAlign: "center",
+                                color: palette.muted,
+                                fontSize: 11,
                               }}
                             >
-                              {date ? Number(date.slice(-2)) : ""}
+                              {day}
                             </Text>
-                          </View>
-                          <View
-                            style={{
-                              height: 5,
-                              width: 5,
-                              borderRadius: 3,
-                              backgroundColor: calendarMarks.has(date)
-                                ? palette.brand
-                                : "transparent",
-                              marginTop: 3,
+                          ),
+                        )}
+                      </View>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        {calendarDays.map((date, i) => (
+                          <Pressable
+                            key={date || i}
+                            disabled={!date}
+                            accessibilityRole="button"
+                            accessibilityLabel={date || undefined}
+                            accessibilityState={{
+                              selected: date === selectedDate,
                             }}
-                          />
-                        </Pressable>
-                      ))}
+                            onPress={() => {
+                              setSelectedDate(date);
+                              setDateChosen(true);
+                            }}
+                            style={{
+                              width: "14.28%",
+                              alignItems: "center",
+                              paddingVertical: 8,
+                            }}
+                          >
+                            <View
+                              style={{
+                                width: 34,
+                                height: 34,
+                                borderRadius: 17,
+                                alignItems: "center",
+                                justifyContent: "center",
+                                backgroundColor:
+                                  date === selectedDate
+                                    ? palette.brand
+                                    : "transparent",
+                              }}
+                            >
+                              <Text
+                                style={{
+                                  color:
+                                    date === selectedDate
+                                      ? palette.onBrand
+                                      : palette.text,
+                                }}
+                              >
+                                {date ? Number(date.slice(-2)) : ""}
+                              </Text>
+                            </View>
+                            <View
+                              style={{
+                                height: 5,
+                                width: 5,
+                                borderRadius: 3,
+                                backgroundColor: calendarMarks.has(date)
+                                  ? palette.brand
+                                  : "transparent",
+                                marginTop: 3,
+                              }}
+                            />
+                          </Pressable>
+                        ))}
+                      </View>
+                    </Card>
+                    <SelectionArea
+                      active={selectionMode}
+                      actions={
+                        <SelectionToolbar
+                          count={selectedIds.length}
+                          total={calendarRows.length}
+                          onSelectAll={() =>
+                            setSelectedIds(
+                              selectedIds.length === calendarRows.length
+                                ? []
+                                : calendarRows.map((r) => r.id),
+                            )
+                          }
+                          onCancel={() => setSelectedIds([])}
+                          onDelete={() =>
+                            deleteMany(
+                              calendarRows
+                                .filter((r) => selectedSet.has(r.id))
+                                .map((r) => r.id),
+                            )
+                          }
+                        />
+                      }
+                    >
+                      <View
+                        style={{
+                          height: 48,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                        }}
+                      >
+                        <SelectedDateText
+                          date={dateChosen ? selectedDate : null}
+                          label={formatDate(selectedDate)}
+                          palette={palette}
+                          style={{
+                            marginVertical: 2,
+                            flexShrink: 1,
+                            marginLeft: 6,
+                          }}
+                        />
+                      </View>
+                    </SelectionArea>
+                    <View
+                      style={{
+                        marginBottom: 16,
+                      }}
+                    >
+                      <Btn
+                        title="Create reminder on this date"
+                        onPress={() => openNew(selectedDate)}
+                      />
                     </View>
-                  </Card>
-                  <SelectionArea active={selectionMode} actions={<SelectionToolbar count={selectedIds.length} total={calendarRows.length} onSelectAll={() => setSelectedIds(selectedIds.length === calendarRows.length ? [] : calendarRows.map(r => r.id))} onCancel={() => setSelectedIds([])} onDelete={() => deleteMany(calendarRows.filter(r => selectedSet.has(r.id)).map(r => r.id))} />}>
-                  <View style={{ height: 48, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                    <SelectedDateText date={dateChosen ? selectedDate : null} label={formatDate(selectedDate)} palette={palette} style={{ marginVertical: 0, flexShrink: 1 }} />
-                    {dateChosen && !selectionMode && calendarRows.length > 0 && <Pressable accessibilityRole="button" accessibilityLabel="Select reminders to delete" onPress={() => setSelectedIds(calendarRows.map(r => r.id))} style={{ padding: 12 }}><Trash2 size={21} color={palette.danger} /></Pressable>}
                   </View>
-                  </SelectionArea>
-                  <View
+                }
+                ListEmptyComponent={
+                  <Text
                     style={{
-                      marginBottom: 16,
+                      color: palette.muted,
                     }}
                   >
-                    <Btn
-                      title="Create reminder on this date"
-                      onPress={() => openNew(selectedDate)}
-                    />
-                  </View>
-                </View>
-              }
-              ListEmptyComponent={
-                <Text
-                  style={{
-                    color: palette.muted,
-                  }}
-                >
-                  No upcoming reminders scheduled for this date.
-                </Text>
-              }
-            />
+                    No upcoming reminders scheduled for this date.
+                  </Text>
+                }
+              />
             </View>
           )}
 
@@ -1397,7 +1646,15 @@ export default function App() {
                   icon={<Sun color={palette.brand} />}
                   title="Appearance"
                   subtitle={isDark ? "Dark Mode" : "Light Mode"}
-                  right={<SettingsToggle label="Dark Mode" value={isDark} onValueChange={(value) => updateSettings({ theme: value ? "dark" : "light" })} />}
+                  right={
+                    <SettingsToggle
+                      label="Dark Mode"
+                      value={isDark}
+                      onValueChange={(value) =>
+                        updateSettings({ theme: value ? "dark" : "light" })
+                      }
+                    />
+                  }
                 />
                 <SettingRow
                   palette={palette}
@@ -1453,7 +1710,8 @@ export default function App() {
                     lineHeight: 18,
                   }}
                 >
-                  Allow clock and reminder permissions so reminders can arrive as close to their scheduled time as possible.
+                  Allow clock and reminder permissions so reminders can arrive
+                  as close to their scheduled time as possible.
                 </Text>
               </Card>
               <Text
@@ -1733,13 +1991,41 @@ export default function App() {
                   placeholder="e.g. Mom's birthday"
                 />
                 <Label>IMAGE (OPTIONAL)</Label>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                  {form.imageUri && <Image source={{ uri: form.imageUri }} style={{ width: 46, height: 46, borderRadius: 15 }} />}
-                  <Btn secondary title={form.imageUri ? "Change image" : "Choose image"} onPress={async () => {
-                    try { const uri = await importReminderImage(); if (uri) setForm(p => ({ ...p, imageUri: uri })); }
-                    catch (e) { Alert.alert("Cannot select image", e.message); }
-                  }} />
-                  {form.imageUri && <Pressable accessibilityRole="button" accessibilityLabel="Remove image" onPress={() => setForm(p => ({ ...p, imageUri: null }))} style={{ padding: 12 }}><Trash2 size={20} color={palette.danger} /></Pressable>}
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 10,
+                  }}
+                >
+                  {form.imageUri && (
+                    <Image
+                      source={{ uri: form.imageUri }}
+                      style={{ width: 46, height: 46, borderRadius: 15 }}
+                    />
+                  )}
+                  <Btn
+                    secondary
+                    title={form.imageUri ? "Change image" : "Choose image"}
+                    onPress={async () => {
+                      try {
+                        const uri = await importReminderImage();
+                        if (uri) setForm((p) => ({ ...p, imageUri: uri }));
+                      } catch (e) {
+                        Alert.alert("Cannot select image", e.message);
+                      }
+                    }}
+                  />
+                  {form.imageUri && (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Remove image"
+                      onPress={() => setForm((p) => ({ ...p, imageUri: null }))}
+                      style={{ padding: 12 }}
+                    >
+                      <Trash2 size={20} color={palette.danger} />
+                    </Pressable>
+                  )}
                 </View>
                 <Label>DESCRIPTION (OPTIONAL)</Label>
                 <Field
@@ -2295,20 +2581,21 @@ export default function App() {
                   lineHeight: 24,
                 }}
               >
-                Offline Reminder stores your reminders, preferences, reminder images and imported
-                audio files locally on your device. The app does not require an
-                account and does not send this data to a backend, analytics or
-                advertising service. Notifications are scheduled through your
-                operating system. Audio files are accessed only when you choose
-                them using the system file picker, and a private copy is saved
-                in app storage. Exporting a backup shares the reminder data with
-                the destination you select; images and imported audio are not included.
-                Android device backup may include app data according to your
-                system backup settings. You can delete reminders and imported
-                sounds in the app, or clear all app data in system settings.
-                Uninstalling the app removes its local private data. Keep your
-                backups safe: they can contain personal information. This policy
-                applies to version 1.0.0. Updated October 13, 2026.
+                Offline Reminder stores your reminders, preferences, reminder
+                images and imported audio files locally on your device. The app
+                does not require an account and does not send this data to a
+                backend, analytics or advertising service. Notifications are
+                scheduled through your operating system. Audio files are
+                accessed only when you choose them using the system file picker,
+                and a private copy is saved in app storage. Exporting a backup
+                shares the reminder data with the destination you select; images
+                and imported audio are not included. Android device backup may
+                include app data according to your system backup settings. You
+                can delete reminders and imported sounds in the app, or clear
+                all app data in system settings. Uninstalling the app removes
+                its local private data. Keep your backups safe: they can contain
+                personal information. This policy applies to version 1.0.0.
+                Updated October 13, 2026.
               </Text>
             </ScrollView>
           </SafeAreaView>
@@ -2317,7 +2604,9 @@ export default function App() {
           visible={Boolean(detail)}
           transparent
           animationType="fade"
-          onRequestClose={() => imagePreview ? setImagePreview(false) : setDetail(null)}
+          onRequestClose={() =>
+            imagePreview ? setImagePreview(false) : setDetail(null)
+          }
         >
           <View
             style={{
@@ -2374,9 +2663,20 @@ export default function App() {
                     {detail?.title}
                   </Text>
                 </View>
-                {detail?.imageUri && !detailImageFailed && <Pressable accessibilityRole="button" accessibilityLabel="View reminder image" onPress={() => setImagePreview(true)} style={{ marginRight: 12 }}>
-                  <Image source={{ uri: detail.imageUri }} onError={() => setDetailImageFailed(true)} style={{ width: 46, height: 46, borderRadius: 15 }} />
-                </Pressable>}
+                {detail?.imageUri && !detailImageFailed && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="View reminder image"
+                    onPress={() => setImagePreview(true)}
+                    style={{ marginRight: 12 }}
+                  >
+                    <Image
+                      source={{ uri: detail.imageUri }}
+                      onError={() => setDetailImageFailed(true)}
+                      style={{ width: 46, height: 46, borderRadius: 15 }}
+                    />
+                  </Pressable>
+                )}
                 <Pressable onPress={() => setDetail(null)}>
                   <X color={palette.text} />
                 </Pressable>
@@ -2494,15 +2794,64 @@ export default function App() {
                 </View>
               </View>
             </View>
-            {imagePreview && detail?.imageUri && <View accessibilityViewIsModal style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, backgroundColor: "#000D" }}>
-              <Pressable accessibilityRole="button" accessibilityLabel="Close image preview" onPress={() => setImagePreview(false)} style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0 }} />
-              <View pointerEvents="box-none" style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
-                <ReminderImagePreview uri={detail.imageUri} />
+            {imagePreview && detail?.imageUri && (
+              <View
+                accessibilityViewIsModal
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  backgroundColor: "#000D",
+                }}
+              >
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Close image preview"
+                  onPress={() => setImagePreview(false)}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                  }}
+                />
+                <View
+                  pointerEvents="box-none"
+                  style={{
+                    flex: 1,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: 24,
+                  }}
+                >
+                  <ReminderImagePreview uri={detail.imageUri} />
+                </View>
+                <SafeAreaView
+                  pointerEvents="box-none"
+                  style={{ position: "absolute", top: 0, right: 0 }}
+                >
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Close image preview"
+                    onPress={() => setImagePreview(false)}
+                    style={{
+                      margin: 16,
+                      width: 44,
+                      height: 44,
+                      borderRadius: 22,
+                      backgroundColor: palette.card,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <X color={palette.text} size={24} />
+                  </Pressable>
+                </SafeAreaView>
               </View>
-              <SafeAreaView pointerEvents="box-none" style={{ position: "absolute", top: 0, right: 0 }}>
-                <Pressable accessibilityRole="button" accessibilityLabel="Close image preview" onPress={() => setImagePreview(false)} style={{ margin: 16, width: 44, height: 44, borderRadius: 22, backgroundColor: palette.card, alignItems: "center", justifyContent: "center" }}><X color={palette.text} size={24} /></Pressable>
-              </SafeAreaView>
-            </View>}
+            )}
           </View>
         </Modal>
         <AppDialog dialog={dialog} onClose={closeDialog} />
