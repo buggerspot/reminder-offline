@@ -70,7 +70,7 @@ export async function exportJSON(reminders, destination = "share") {
     app: "Offline Reminder",
     schemaVersion: 2,
     exportedAt: new Date().toISOString(),
-    reminders: reminders.map(({ notificationId, soundUri, ...r }) => r),
+    reminders: reminders.map(({ notificationId, soundUri, imageUri, ...r }) => r),
   };
   const uri = `${FileSystem.cacheDirectory}offline-reminder-backup-${Date.now()}.json`;
   await FileSystem.writeAsStringAsync(uri, JSON.stringify(payload, null, 2));

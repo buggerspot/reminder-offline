@@ -1,6 +1,7 @@
 import { Platform, NativeModules } from "react-native";
 import * as Notifications from "expo-notifications";
 import { nextOccurrence } from "./recurrence";
+import { notificationImageAttachments } from "./images";
 
 export const REMINDER_CATEGORY = "REMINDER_ACTIONS";
 export const COMPLETE_ACTION = "REMINDER_COMPLETE";
@@ -64,10 +65,12 @@ export async function scheduleReminder(reminder, soundEnabled = true) {
   if (!next) return null;
   const date = new Date(`${next}T${reminder.time}:00`);
   if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) return null;
+  const attachments = Platform.OS === "ios" ? await notificationImageAttachments(reminder.imageUri) : [];
   const identifier = await Notifications.scheduleNotificationAsync({
     content: {
       title: reminder.title,
       body: reminder.description || "It is time for your reminder.",
+      ...(attachments.length ? { attachments } : {}),
       data: { reminderId: reminder.id },
       categoryIdentifier: REMINDER_CATEGORY,
       sound: soundEnabled ? "reminder.wav" : false,

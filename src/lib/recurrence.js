@@ -96,3 +96,10 @@ export function isMissed(r, now = new Date()) {
   const today = localDate(now);
   return occursOn(r, today) && +new Date(`${today}T${r.time}:00`) < +now;
 }
+
+export function calendarOccurrences(reminders, date, now = Date.now()) {
+  return reminders
+    .filter((r) => occursOn(r, date) && +new Date(`${date}T${r.time}:00`) >= +now)
+    .map((r) => ({ ...r, seriesDate: r.date, date, completed: false, missed: false }))
+    .sort((a, b) => a.time.localeCompare(b.time));
+}

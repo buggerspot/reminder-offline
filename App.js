@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import {
   Appearance,
+  Image,
   AppState,
   FlatList,
   Linking,
@@ -64,10 +65,12 @@ import {
 } from "./src/lib/storage";
 import { cleanupCompleted } from "./src/lib/retention";
 import { reminderCategories } from "./src/lib/categories";
-import { deleteSelected } from "./src/lib/selection";
+import { importReminderImage } from "./src/lib/images";
+import { completeSelectedOccurrences, deleteSelected } from "./src/lib/selection";
 import { exportJSON, importReminders, newReminders } from "./src/lib/exportImport";
 import {
   occursOn,
+  calendarOccurrences,
   nextOccurrence,
   displayOccurrence,
   validDate,
@@ -85,6 +88,9 @@ import {
 import {
   AppDialog,
   SelectionToolbar,
+  SelectionArea,
+  SelectedDateText,
+  ReminderImagePreview,
   PaletteContext,
   Card,
   Btn,
@@ -139,6 +145,9 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [imagePreview, setImagePreview] = useState(false);
+  const [detailImageFailed, setDetailImageFailed] = useState(false);
+  useEffect(() => { setImagePreview(false); setDetailImageFailed(false); }, [detail?.id, detail?.imageUri]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     title: "",
@@ -149,6 +158,7 @@ export default function App() {
     repeatUntil: "",
   });
   const [selectedDate, setSelectedDate] = useState(todayISO());
+  const [dateChosen, setDateChosen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(new Date());
   const [clock, setClock] = useState(Date.now());
   const [permission, setPermission] = useState(true);
@@ -186,9 +196,9 @@ export default function App() {
     else { dialogOpen.current = true; setDialog(next); }
   } }), []);
   const closeDialog = () => { const next = dialogQueue.current.shift() || null; dialogOpen.current = !!next; setDialog(next); };
-  const [selectionMode, setSelectionMode] = useState(false);
+  const selectionMode = selectedIds.length > 0;
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
-  useEffect(() => { setSelectedIds([]); setSelectionMode(false); }, [tab, filter, selectedDate, search]);
+  useEffect(() => { setSelectedIds([]); }, [tab, filter, selectedDate, search]);
   const isDark = settings.theme === "dark";
   const palette = useMemo(
     () =>
@@ -493,6 +503,7 @@ export default function App() {
     setEditing(null);
     setForm({
       title: "",
+      imageUri: null,
       description: "",
       date,
       weekdays: [new Date(`${date}T12:00:00`).getDay()],
@@ -508,6 +519,7 @@ export default function App() {
     setEditing(r);
     setForm({
       title: r.title,
+      imageUri: r.imageUri || null,
       description: r.description || "",
       date: r.seriesDate || r.date,
       weekdays: r.weekdays || [
@@ -592,6 +604,7 @@ export default function App() {
       const item = {
         id: editing?.id || makeId(),
         title,
+        imageUri: form.imageUri || null,
         description: form.description.trim(),
         date: form.date,
         time: form.time,
@@ -645,7 +658,6 @@ export default function App() {
       ],
     );
   const toggleSelection = (id) => {
-    setSelectionMode(true);
     setSelectedIds((ids) =>
       ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
     );
@@ -673,7 +685,7 @@ export default function App() {
               await saveReminders(next);
               setReminders(next);
               setSelectedIds([]);
-              setSelectionMode(false);
+
             } catch (e) {
               Alert.alert("Delete failed", e.message);
             }
@@ -687,20 +699,33 @@ export default function App() {
     const query = deferredSearch.trim().toLowerCase();
     return query ? tabRows.filter((r) => (r.title + " " + (r.description || "")).toLowerCase().includes(query)) : tabRows;
   }, [tabRows, deferredSearch]);
+  const completeSelected = async () => {
+    const rows = new Map(visible.filter(r => selectedSet.has(r.id)).map(r => [r.id, r]));
+    if (!rows.size) return;
+    try {
+      const completedAt = new Date().toISOString();
+      const current = reminderRef.current;
+      const updated = completeSelectedOccurrences(current, [...rows.values()], completedAt);
+      for (let i = 0; i < current.length; i++) {
+        if (current[i] === updated[i]) continue;
+        await NativeModules.ReminderNative?.clearNotification?.(current[i].id);
+        await cancelReminderNotification(current[i].notificationId);
+        updated[i].notificationId = await scheduleReminder(updated[i], settings.soundEnabled);
+      }
+      await saveReminders(updated);
+      setReminders(updated);
+
+      setSelectedIds([]);
+    } catch (e) { Alert.alert("Could not complete reminders", e.message); }
+  };
   const calendarRows = useMemo(
-    () =>
-      reminders
-        .filter((r) => occursOn(r, selectedDate, true))
-        .map((r) => ({
-          ...r,
-          seriesDate: r.date,
-          date: selectedDate,
-          completed:
-            r.completed || (r.completedDates || []).includes(selectedDate),
-        }))
-        .sort((a, b) => a.time.localeCompare(b.time)),
-    [reminders, selectedDate],
+    () => calendarOccurrences(reminders, selectedDate, clock),
+    [reminders, selectedDate, clock],
   );
+  useEffect(() => {
+    const available = new Set((tab === "Calendar" ? calendarRows : visible).map(r => r.id));
+    setSelectedIds(ids => ids.every(id => available.has(id)) ? ids : ids.filter(id => available.has(id)));
+  }, [tab, calendarRows, visible]);
   const calendarDays = useMemo(() => {
     const year = calendarMonth.getFullYear(),
       month = calendarMonth.getMonth();
@@ -717,10 +742,10 @@ export default function App() {
     () =>
       new Set(
         calendarDays.filter(
-          (date) => date && reminders.some((r) => occursOn(r, date)),
+          (date) => date && reminders.some((r) => occursOn(r, date) && +new Date(`${date}T${r.time}:00`) >= clock),
         ),
       ),
-    [calendarDays, reminders],
+    [calendarDays, reminders, clock],
   );
   const moveMonth = (amount) =>
     setCalendarMonth(
@@ -1015,7 +1040,8 @@ export default function App() {
                   <Text style={{color: filter === category ? palette.onBrand : palette.text, fontSize: 23, fontWeight: "800"}}>{categoryRows[category].length}</Text>
                   <Text style={{color: filter === category ? palette.onBrand : palette.muted, fontSize: 11, marginTop: 3}}>{category}</Text>
                   </Pressable>)}</View>
-                  <SelectionToolbar context={filter === "Completed" ? "Completed reminders are automatically removed after 7 days." : filter === "Missed" ? "Missed reminders stay here until you complete or delete them." : "Long-press a reminder to select and manage it."} active={selectionMode} count={selectedIds.length} total={tabRows.length} onSelectAll={() => setSelectedIds(selectedIds.length === tabRows.length ? [] : tabRows.map(r => r.id))} onCancel={() => {setSelectionMode(false);setSelectedIds([]);}} onDelete={() => deleteMany(tabRows.filter(r => selectedSet.has(r.id)).map(r => r.id))} />
+                  <SelectionArea active={selectionMode} actions={<SelectionToolbar count={selectedIds.length} total={visible.length} onSelectAll={() => setSelectedIds(selectedIds.length === visible.length ? [] : visible.map(r => r.id))} onCancel={() => {setSelectedIds([]);}} onDelete={() => deleteMany(visible.filter(r => selectedSet.has(r.id)).map(r => r.id))} onComplete={filter === "Upcoming" ? completeSelected : undefined} />}>
+
                   <View
                     style={{
                       flexDirection: "row",
@@ -1025,11 +1051,12 @@ export default function App() {
                       borderColor: palette.border,
                       borderRadius: 14,
                       paddingHorizontal: 12,
-                      marginBottom: 14,
+                      height: 48,
                     }}
                   >
                     <Search color={palette.muted} size={18} />
                     <TextInput
+                      editable={!selectionMode}
                       value={search}
                       onChangeText={setSearch}
                       placeholder="Search reminders"
@@ -1046,6 +1073,7 @@ export default function App() {
                       </Pressable>
                     ) : null}
                   </View>
+                  </SelectionArea>
                   </View>) : (
                 <ReminderRow
                   item={item}
@@ -1114,13 +1142,14 @@ export default function App() {
           )}
 
           {tab === "Calendar" && (
-            <View style={{flex: 1}}>{selectionMode && <View style={{paddingHorizontal: 20}}><SelectionToolbar active={selectionMode} count={selectedIds.length} total={calendarRows.length} onSelectAll={() => setSelectedIds(selectedIds.length === calendarRows.length ? [] : calendarRows.map(r => r.id))} onCancel={() => {setSelectionMode(false);setSelectedIds([]);}} onDelete={() => deleteMany(calendarRows.filter(r => selectedSet.has(r.id)).map(r => r.id))} /></View>}
+            <View style={{flex: 1}}>
             <FlatList
               data={calendarRows}
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
                 <ReminderRow
                   item={item}
+                  showStatus
                   selected={selectedSet.has(item.id)}
                   selectionMode={selectionMode}
                   onLongPress={() => toggleSelection(item.id)}
@@ -1202,6 +1231,7 @@ export default function App() {
                         onPress={() => {
                           setCalendarMonth(new Date());
                           setSelectedDate(todayISO());
+                          setDateChosen(true);
                         }}
                       />
                       <Chip label="Next year" onPress={() => moveMonth(12)} />
@@ -1242,7 +1272,7 @@ export default function App() {
                           accessibilityState={{
                             selected: date === selectedDate,
                           }}
-                          onPress={() => setSelectedDate(date)}
+                          onPress={() => { setSelectedDate(date); setDateChosen(true); }}
                           style={{
                             width: "14.28%",
                             alignItems: "center",
@@ -1288,16 +1318,12 @@ export default function App() {
                       ))}
                     </View>
                   </Card>
-                  <Text
-                    style={{
-                      color: palette.text,
-                      fontSize: 19,
-                      fontWeight: "800",
-                      marginVertical: 16,
-                    }}
-                  >
-                    {formatDate(selectedDate)}
-                  </Text>
+                  <SelectionArea active={selectionMode} actions={<SelectionToolbar count={selectedIds.length} total={calendarRows.length} onSelectAll={() => setSelectedIds(selectedIds.length === calendarRows.length ? [] : calendarRows.map(r => r.id))} onCancel={() => setSelectedIds([])} onDelete={() => deleteMany(calendarRows.filter(r => selectedSet.has(r.id)).map(r => r.id))} />}>
+                  <View style={{ height: 48, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                    <SelectedDateText date={dateChosen ? selectedDate : null} label={formatDate(selectedDate)} palette={palette} style={{ marginVertical: 0, flexShrink: 1 }} />
+                    {dateChosen && !selectionMode && calendarRows.length > 0 && <Pressable accessibilityRole="button" accessibilityLabel="Select reminders to delete" onPress={() => setSelectedIds(calendarRows.map(r => r.id))} style={{ padding: 12 }}><Trash2 size={21} color={palette.danger} /></Pressable>}
+                  </View>
+                  </SelectionArea>
                   <View
                     style={{
                       marginBottom: 16,
@@ -1316,7 +1342,7 @@ export default function App() {
                     color: palette.muted,
                   }}
                 >
-                  No reminders scheduled for this date.
+                  No upcoming reminders scheduled for this date.
                 </Text>
               }
             />
@@ -1706,6 +1732,15 @@ export default function App() {
                   }
                   placeholder="e.g. Mom's birthday"
                 />
+                <Label>IMAGE (OPTIONAL)</Label>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                  {form.imageUri && <Image source={{ uri: form.imageUri }} style={{ width: 46, height: 46, borderRadius: 15 }} />}
+                  <Btn secondary title={form.imageUri ? "Change image" : "Choose image"} onPress={async () => {
+                    try { const uri = await importReminderImage(); if (uri) setForm(p => ({ ...p, imageUri: uri })); }
+                    catch (e) { Alert.alert("Cannot select image", e.message); }
+                  }} />
+                  {form.imageUri && <Pressable accessibilityRole="button" accessibilityLabel="Remove image" onPress={() => setForm(p => ({ ...p, imageUri: null }))} style={{ padding: 12 }}><Trash2 size={20} color={palette.danger} /></Pressable>}
+                </View>
                 <Label>DESCRIPTION (OPTIONAL)</Label>
                 <Field
                   value={form.description}
@@ -2260,14 +2295,14 @@ export default function App() {
                   lineHeight: 24,
                 }}
               >
-                Offline Reminder stores your reminders, preferences and imported
+                Offline Reminder stores your reminders, preferences, reminder images and imported
                 audio files locally on your device. The app does not require an
                 account and does not send this data to a backend, analytics or
                 advertising service. Notifications are scheduled through your
                 operating system. Audio files are accessed only when you choose
                 them using the system file picker, and a private copy is saved
                 in app storage. Exporting a backup shares the reminder data with
-                the destination you select; imported audio is not included.
+                the destination you select; images and imported audio are not included.
                 Android device backup may include app data according to your
                 system backup settings. You can delete reminders and imported
                 sounds in the app, or clear all app data in system settings.
@@ -2282,7 +2317,7 @@ export default function App() {
           visible={Boolean(detail)}
           transparent
           animationType="fade"
-          onRequestClose={() => setDetail(null)}
+          onRequestClose={() => imagePreview ? setImagePreview(false) : setDetail(null)}
         >
           <View
             style={{
@@ -2339,6 +2374,9 @@ export default function App() {
                     {detail?.title}
                   </Text>
                 </View>
+                {detail?.imageUri && !detailImageFailed && <Pressable accessibilityRole="button" accessibilityLabel="View reminder image" onPress={() => setImagePreview(true)} style={{ marginRight: 12 }}>
+                  <Image source={{ uri: detail.imageUri }} onError={() => setDetailImageFailed(true)} style={{ width: 46, height: 46, borderRadius: 15 }} />
+                </Pressable>}
                 <Pressable onPress={() => setDetail(null)}>
                   <X color={palette.text} />
                 </Pressable>
@@ -2456,6 +2494,15 @@ export default function App() {
                 </View>
               </View>
             </View>
+            {imagePreview && detail?.imageUri && <View accessibilityViewIsModal style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, backgroundColor: "#000D" }}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Close image preview" onPress={() => setImagePreview(false)} style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0 }} />
+              <View pointerEvents="box-none" style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
+                <ReminderImagePreview uri={detail.imageUri} />
+              </View>
+              <SafeAreaView pointerEvents="box-none" style={{ position: "absolute", top: 0, right: 0 }}>
+                <Pressable accessibilityRole="button" accessibilityLabel="Close image preview" onPress={() => setImagePreview(false)} style={{ margin: 16, width: 44, height: 44, borderRadius: 22, backgroundColor: palette.card, alignItems: "center", justifyContent: "center" }}><X color={palette.text} size={24} /></Pressable>
+              </SafeAreaView>
+            </View>}
           </View>
         </Modal>
         <AppDialog dialog={dialog} onClose={closeDialog} />

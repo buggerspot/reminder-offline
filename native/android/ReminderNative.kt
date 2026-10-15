@@ -1,6 +1,7 @@
 package com.buggerspot.reminderoffline
 
 import android.app.*
+import android.graphics.BitmapFactory
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -143,8 +144,8 @@ object ReminderEngine {
       if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(NotificationChannel(channel, "Missed reminders", NotificationManager.IMPORTANCE_DEFAULT).apply { setSound(null, null) })
       val open = PendingIntent.getActivity(c, 0, c.packageManager.getLaunchIntentForPackage(c.packageName)!!, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
       val body = if (count == 1) "You have 1 missed reminder. Check it or mark it as complete." else "You have $count missed reminders. Check them or mark them as complete."
-      val notification = branded(NotificationCompat.Builder(c, channel), c).setContentTitle("Missed reminders").setContentText(body)
-        .setStyle(NotificationCompat.BigTextStyle().bigText(body)).setSubText("Offline Reminder").setContentIntent(open)
+      val notification = branded(NotificationCompat.Builder(c, channel), c).setContentTitle("Missed alerts").setContentText(body)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(body)).setContentIntent(open)
         .setAutoCancel(true).setCategory(NotificationCompat.CATEGORY_REMINDER).build()
       try {
         manager.notify("missed-summary", 0, notification)
@@ -254,7 +255,28 @@ object ReminderEngine {
     val open = PendingIntent.getActivity(c, id.hashCode(), launch, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     val complete = PendingIntent.getBroadcast(c, 0, Intent(c,ReminderReceiver::class.java).setAction("REMINDER_COMPLETE").setData(Uri.parse("offline-reminder://complete/${Uri.encode(id)}/$date")).putExtra("id",id).putExtra("date",date), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     val clear = PendingIntent.getBroadcast(c, 0, Intent(c,ReminderReceiver::class.java).setAction("REMINDER_CLEAR").setData(Uri.parse("offline-reminder://clear/${Uri.encode(id)}")).putExtra("id",id), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-    val notification = branded(NotificationCompat.Builder(c,channel), c).setOnlyAlertOnce(true).setSound(null).setVibrate(longArrayOf(0,250,150,250)).setSmallIcon(R.drawable.ic_reminder_notification).setContentTitle(r.getString("title")).setContentText(r.optString("description").ifEmpty {"It is time for your reminder."}).setSubText("Offline Reminder").setContentIntent(open).setAutoCancel(false).setCategory(NotificationCompat.CATEGORY_REMINDER).setPriority(NotificationCompat.PRIORITY_HIGH).setDeleteIntent(clear).addAction(0,"Mark complete",complete).addAction(0,"Clear",clear).build()
+    val builder = branded(NotificationCompat.Builder(c,channel), c)
+    // Retain the compact large icon and expose the selected image when expanded.
+    try {
+      val image = r.optString("imageUri")
+      if (image.startsWith("file://")) {
+        val file = File(Uri.parse(image).path ?: "")
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        val options = BitmapFactory.Options().apply {
+          inSampleSize = 1
+          while (bounds.outWidth / inSampleSize > 1024 || bounds.outHeight / inSampleSize > 1024) inSampleSize *= 2
+        }
+        BitmapFactory.decodeFile(file.path, options)?.let { picture ->
+          val scale = minOf(1f, 256f / maxOf(picture.width, picture.height))
+          val thumbnail = Bitmap.createScaledBitmap(picture, maxOf(1, (picture.width * scale).toInt()), maxOf(1, (picture.height * scale).toInt()), true)
+          builder.setLargeIcon(thumbnail).setStyle(NotificationCompat.BigPictureStyle()
+            .bigPicture(picture)
+            .setSummaryText(r.optString("description").ifEmpty { "It is time for your reminder." }))
+        }
+      }
+    } catch (e: Exception) { android.util.Log.w("OfflineReminder", "Image unavailable", e) }
+    val notification = builder.setOnlyAlertOnce(true).setSound(null).setVibrate(longArrayOf(0,250,150,250)).setSmallIcon(R.drawable.ic_reminder_notification).setContentTitle(r.getString("title")).setContentText(r.optString("description").ifEmpty {"It is time for your reminder."}).setContentIntent(open).setAutoCancel(false).setCategory(NotificationCompat.CATEGORY_REMINDER).setPriority(NotificationCompat.PRIORITY_HIGH).setDeleteIntent(clear).addAction(0,"Mark complete",complete).addAction(0,"Clear",clear).build()
     try {manager.notify(ReminderPlaybackService.notificationId(id),notification)} catch (_: SecurityException) { /* permission banner handles this */ }
     // Playback owns audio; the notification channel stays silent to avoid overlap.
     val permitted = Build.VERSION.SDK_INT < 26 || manager.getNotificationChannel(channel)?.let { it.importance >= NotificationManager.IMPORTANCE_DEFAULT } == true

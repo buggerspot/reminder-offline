@@ -1,6 +1,7 @@
 import React, { useContext, useEffect, useRef } from "react";
 import {
   Animated,
+  Image,
   AccessibilityInfo,
   View,
   Text,
@@ -9,6 +10,7 @@ import {
   Switch,
   Modal,
   Keyboard,
+  useWindowDimensions,
 } from "react-native";
 import {
   CalendarDays,
@@ -289,7 +291,9 @@ export const Chip = ({ label, active, onPress }) => {
   );
 };
 export const ReminderRow = React.memo(
-  ({ item, onOpen, onLongPress, selected, selectionMode }) => {
+  ({ item, onOpen, onLongPress, selected, selectionMode, showStatus = false }) => {
+    const [imageFailed, setImageFailed] = React.useState(false);
+    useEffect(() => setImageFailed(false), [item.imageUri]);
     const palette = useContext(PaletteContext);
     return (
       <Pressable
@@ -328,6 +332,8 @@ export const ReminderRow = React.memo(
             )
           ) : selected ? (
             <CheckCircle2 color={palette.brand} size={21} />
+          ) : item.imageUri && !imageFailed ? (
+            <Image source={{ uri: item.imageUri }} onError={() => setImageFailed(true)} style={{ width: 46, height: 46, borderRadius: 15 }} />
           ) : (
             <CalendarDays color={palette.brand} size={21} />
           )}
@@ -340,7 +346,7 @@ export const ReminderRow = React.memo(
           <Text
             numberOfLines={1}
             style={{
-              color: palette.text,
+              color: showStatus && item.missed ? palette.danger : palette.text,
               fontSize: 15,
               fontWeight: "700",
               textDecorationLine: item.completed ? "line-through" : "none",
@@ -364,7 +370,8 @@ export const ReminderRow = React.memo(
             <Text
               numberOfLines={1}
               style={{
-                color: palette.muted,
+                color: showStatus && item.missed ? palette.danger : palette.muted,
+                textDecorationLine: showStatus && item.completed ? "line-through" : "none",
                 fontSize: 12,
                 marginTop: 4,
               }}
@@ -383,82 +390,52 @@ export const ReminderRow = React.memo(
   },
 );
 
-export function SelectionToolbar({
-  context = "Long-press a reminder to select and manage it.",
-  active = true,
-  count,
-  total,
-  onSelectAll,
-  onDelete,
-  onCancel,
-}) {
-  const palette = useContext(PaletteContext);
-  const tilt = useRef(new Animated.Value(1)).current;
+// Both layers occupy the same space, so selection never moves the reminder list.
+export function SelectionArea({ active, actions, children }) {
+  const progress = useRef(new Animated.Value(active ? 1 : 0)).current;
+  const reducedMotion = useRef(false);
   useEffect(() => {
-    let cancelled = false;
-    AccessibilityInfo.isReduceMotionEnabled().then((reduced) => {
-      if (cancelled) return;
-      tilt.setValue(reduced ? 1 : 0);
-      Animated.timing(tilt, { toValue: 1, duration: reduced ? 0 : 180, useNativeDriver: true }).start();
-    });
-    return () => { cancelled = true; tilt.stopAnimation(); };
-  }, [active, tilt]);
+    let mounted = true;
+    AccessibilityInfo.isReduceMotionEnabled().then(value => { if (mounted) reducedMotion.current = value; });
+    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", value => { reducedMotion.current = value; });
+    return () => { mounted = false; subscription.remove(); };
+  }, []);
+  useEffect(() => {
+    progress.stopAnimation();
+    Animated.timing(progress, { toValue: active ? 1 : 0, duration: reducedMotion.current ? 0 : 160, useNativeDriver: true }).start();
+    return () => progress.stopAnimation();
+  }, [active, progress]);
+  const layer = { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 };
   return (
-    <View
-      style={{ minHeight: 64, marginBottom: 8, justifyContent: "center" }}
-      
-    >
-      <Animated.View
-        style={{
-          minHeight: 64,
-          paddingHorizontal: 12,
-          borderRadius: 14,
-          borderWidth: 1,
-          borderColor: palette.border,
-          backgroundColor: palette.card,
-          transform: [{ perspective: 600 }, { rotateX: tilt.interpolate({ inputRange: [0, 1], outputRange: ["8deg", "0deg"] }) }],
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 8,
-        }}
-      >
-        {active ? <>
-        <Pressable
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: count > 0 && count === total }}
-          onPress={onSelectAll}
-          style={{ minHeight: 44, justifyContent: "center" }}
-        >
-          <Text style={{ color: palette.brand, fontWeight: "700" }}>
-            {count === total && total > 0 ? "Deselect all" : "Select all"} ({count})
-          </Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          disabled={!count}
-          accessibilityState={{ disabled: !count }}
-          onPress={onDelete}
-          style={{ minHeight: 44, justifyContent: "center" }}
-        >
-          <Text
-            style={{
-              color: count ? palette.danger : palette.muted,
-              fontWeight: "700",
-            }}
-          >
-            Delete
-          </Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          onPress={onCancel}
-          style={{ minHeight: 44, justifyContent: "center" }}
-        >
-          <Text style={{ color: palette.text, fontWeight: "700" }}>Cancel</Text>
-        </Pressable>
-        </> : <Text style={{ flex: 1, color: palette.muted, fontSize: 12, lineHeight: 18 }}>{context}</Text>}
+    <View style={{ height: 48, marginBottom: 14 }}>
+      <Animated.View pointerEvents={active ? "none" : "auto"} accessibilityElementsHidden={active} importantForAccessibility={active ? "no-hide-descendants" : "auto"} style={[layer, { opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }) }]}>
+        {children}
       </Animated.View>
+      <Animated.View pointerEvents={active ? "auto" : "none"} accessibilityElementsHidden={!active} importantForAccessibility={active ? "auto" : "no-hide-descendants"} style={[layer, { opacity: progress }]}>
+        {actions}
+      </Animated.View>
+    </View>
+  );
+}
+
+export function SelectionToolbar({ count, total, onSelectAll, onDelete, onCancel, onComplete }) {
+  const palette = useContext(PaletteContext);
+  const actionStyle = { flex: 1, minWidth: 0, height: 46, alignItems: "center", justifyContent: "center", paddingHorizontal: 2 };
+  const textStyle = { fontSize: 12, lineHeight: 15, fontWeight: "700", textAlign: "center" };
+  return (
+    <View style={{ height: 48, borderRadius: 14, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.card, flexDirection: "row", alignItems: "center", paddingHorizontal: 4 }}>
+      <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: count > 0 && count === total }} onPress={onSelectAll} style={actionStyle}>
+        <Text style={[textStyle, { color: palette.brand }]}>{count === total && total > 0 ? "Deselect all" : "Select all"} ({count})</Text>
+      </Pressable>
+      {onComplete && <Pressable accessibilityRole="button" accessibilityLabel="Complete selected reminders" disabled={!count} onPress={onComplete} style={actionStyle}>
+        <Text style={[textStyle, { color: count ? palette.brand : palette.muted }]}>Complete</Text>
+      </Pressable>}
+      <Pressable accessibilityRole="button" accessibilityLabel="Delete selected reminders" disabled={!count} onPress={onDelete} style={actionStyle}>
+        <Trash2 size={21} color={count ? palette.danger : palette.muted} />
+      </Pressable>
+      <Pressable accessibilityRole="button" onPress={onCancel} style={actionStyle}>
+        <Text style={[textStyle, { color: palette.text }]}>Cancel</Text>
+      </Pressable>
     </View>
   );
 }
@@ -532,4 +509,40 @@ export function AppDialog({ dialog, onClose }) {
       </View>
     </Modal>
   );
+}
+
+export function SelectedDateText({ date, label, palette, style }) {
+  const tilt = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    let cancelled = false;
+    AccessibilityInfo.isReduceMotionEnabled().then((reduced) => {
+      if (cancelled || reduced || !date) return;
+      tilt.setValue(0);
+      Animated.sequence([
+        Animated.timing(tilt, { toValue: 1, duration: 100, useNativeDriver: true }),
+        Animated.timing(tilt, { toValue: 0, duration: 180, useNativeDriver: true }),
+      ]).start();
+    });
+    return () => { cancelled = true; tilt.stopAnimation(); };
+  }, [date, tilt]);
+  return <Animated.Text style={[{ color: palette.text, fontSize: 19, fontWeight: "800", marginVertical: 16, transform: [{ rotate: tilt.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "-2deg"] }) }] }, style]}>{label}</Animated.Text>;
+}
+
+export function ReminderImagePreview({ uri }) {
+  const { width, height } = useWindowDimensions();
+  const [size, setSize] = React.useState(null);
+  const [failed, setFailed] = React.useState(false);
+  useEffect(() => {
+    let active = true;
+    setSize(null);
+    setFailed(false);
+    Image.getSize(uri, (w, h) => { if (active) setSize({ width: w, height: h }); }, () => { if (active) setFailed(true); });
+    return () => { active = false; };
+  }, [uri]);
+  if (failed) return <Text style={{ color: "white" }}>Image unavailable</Text>;
+  if (!size) return null;
+  const scale = Math.min((width - 48) / size.width, (height * 0.75) / size.height);
+  return <Pressable accessibilityLabel="Reminder image" onPress={() => {}}>
+    <Image source={{ uri }} accessibilityLabel="Reminder image" resizeMode="contain" onError={() => setFailed(true)} style={{ width: size.width * scale, height: size.height * scale, borderRadius: 14 }} />
+  </Pressable>;
 }
