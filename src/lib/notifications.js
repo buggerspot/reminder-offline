@@ -45,11 +45,8 @@ export async function configureNotifications(soundEnabled = true) {
   ]);
 
   const current = await Notifications.getPermissionsAsync();
-  if (!current.granted) {
-    const requested = await Notifications.requestPermissionsAsync();
-    return requested.granted;
-  }
-  return true;
+  // Onboarding explains permissions before initiating any system request.
+  return current.granted;
 }
 
 export async function scheduleReminder(reminder, soundEnabled = true) {

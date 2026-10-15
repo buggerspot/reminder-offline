@@ -1,7 +1,6 @@
 import React, { useContext, useEffect, useRef } from "react";
 import {
   Animated,
-  Image,
   AccessibilityInfo,
   View,
   Text,
@@ -10,7 +9,6 @@ import {
   Switch,
   Modal,
   Keyboard,
-  useWindowDimensions,
 } from "react-native";
 import {
   CalendarDays,
@@ -22,7 +20,9 @@ import {
 } from "lucide-react-native";
 import { localDate } from "./lib/recurrence";
 import { formatDate, formatTime } from "./lib/format";
-export const PaletteContext = React.createContext(null);
+import { PaletteContext } from "./palette";
+import { ZoomableImage } from "./interaction-components";
+export { PaletteContext } from "./palette";
 export function RecurrenceLabel({ repeat, missed }) {
   const palette = useContext(PaletteContext);
   if ((!repeat || repeat === "none") && !missed) return null;
@@ -314,7 +314,8 @@ export const ReminderRow = React.memo(
         accessibilityState={{
           selected: !!selected,
         }}
-        style={{
+        style={({ pressed }) => ({
+          opacity: pressed ? 0.78 : 1,
           flexDirection: "row",
           alignItems: "center",
           padding: 14,
@@ -323,7 +324,7 @@ export const ReminderRow = React.memo(
           borderWidth: 1,
           borderColor: selected ? palette.brand : palette.border,
           backgroundColor: palette.card,
-        }}
+        })}
       >
         <View
           style={{
@@ -345,8 +346,9 @@ export const ReminderRow = React.memo(
           ) : selected ? (
             <CheckCircle2 color={palette.brand} size={21} />
           ) : item.imageUri && !imageFailed ? (
-            <Image
-              source={{ uri: item.imageUri }}
+            <ZoomableImage
+              uri={item.imageUri}
+              onLongPress={() => onLongPress?.(item)}
               onError={() => setImageFailed(true)}
               style={{ width: 46, height: 46, borderRadius: 15 }}
             />
@@ -671,49 +673,5 @@ export function SelectedDateText({ date, label, palette, style }) {
     >
       {label}
     </Animated.Text>
-  );
-}
-
-export function ReminderImagePreview({ uri }) {
-  const { width, height } = useWindowDimensions();
-  const [size, setSize] = React.useState(null);
-  const [failed, setFailed] = React.useState(false);
-  useEffect(() => {
-    let active = true;
-    setSize(null);
-    setFailed(false);
-    Image.getSize(
-      uri,
-      (w, h) => {
-        if (active) setSize({ width: w, height: h });
-      },
-      () => {
-        if (active) setFailed(true);
-      },
-    );
-    return () => {
-      active = false;
-    };
-  }, [uri]);
-  if (failed) return <Text style={{ color: "white" }}>Image unavailable</Text>;
-  if (!size) return null;
-  const scale = Math.min(
-    (width - 48) / size.width,
-    (height * 0.75) / size.height,
-  );
-  return (
-    <Pressable accessibilityLabel="Reminder image" onPress={() => {}}>
-      <Image
-        source={{ uri }}
-        accessibilityLabel="Reminder image"
-        resizeMode="contain"
-        onError={() => setFailed(true)}
-        style={{
-          width: size.width * scale,
-          height: size.height * scale,
-          borderRadius: 14,
-        }}
-      />
-    </Pressable>
   );
 }

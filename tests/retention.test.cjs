@@ -26,7 +26,7 @@ test('cleanup uses elapsed time, keeps boundary and active records, and survives
 
 test('native containers have no raw JSX text, including inline whitespace', () => {
   const parser = require('@babel/parser');
-  for (const file of ['App.js', 'src/components.jsx']) {
+  for (const file of ['App.js', 'src/components.jsx', 'src/interaction-components.jsx', 'src/permission-onboarding.jsx']) {
     const ast = parser.parse(fs.readFileSync(file, 'utf8'), { sourceType: 'module', plugins: ['jsx'] });
     function visit(node, parent) {
       if (!node || typeof node !== 'object') return;

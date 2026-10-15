@@ -8,9 +8,7 @@ import React, {
 } from "react";
 import {
   Appearance,
-  Image,
   AppState,
-  FlatList,
   Linking,
   LayoutAnimation,
   NativeModules,
@@ -18,12 +16,11 @@ import {
   Modal,
   Platform,
   Pressable,
-  ScrollView,
   Text,
   TextInput,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, SafeAreaProvider } from "react-native-safe-area-context";
 import {
   Bell,
   CalendarDays,
@@ -97,7 +94,6 @@ import {
   SelectionToolbar,
   SelectionArea,
   SelectedDateText,
-  ReminderImagePreview,
   PaletteContext,
   Card,
   Btn,
@@ -108,6 +104,13 @@ import {
   SettingsToggle,
   PermissionBanner,
 } from "./src/components";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import {
+  TabPager, PremiumFlatList as FlatList, PremiumScrollView as ScrollView,
+  ImageViewerScope, ZoomableImage, ReminderSheet,
+} from "./src/interaction-components";
+import { PermissionOnboarding } from "./src/permission-onboarding";
+import { CATEGORY_NAMES } from "./src/lib/interactions";
 const C = {
   brand: "#0F766E",
   brand2: "#14B8A6",
@@ -133,7 +136,7 @@ const timeNow = () => {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-export default function App() {
+function ReminderApp() {
   const [reminders, setReminders] = useState([]);
   const [settings, setSettings] = useState({
     theme: "light",
@@ -148,14 +151,27 @@ export default function App() {
   const [loadAttempt, setLoadAttempt] = useState(0);
   const dataReady = useRef(false);
   const [tab, setTab] = useState("Home");
+  const [tabBarHeight, setTabBarHeight] = useState(60);
   const [filter, setFilter] = useState("Upcoming");
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState(null);
   const [detail, setDetail] = useState(null);
-  const [imagePreview, setImagePreview] = useState(false);
+  const sheetRef = useRef(null);
+  const formViewerRef = useRef(null);
+  const pendingEditor = useRef(false);
+  const showPendingEditor = useCallback(() => {
+    if (!pendingEditor.current) return;
+    pendingEditor.current = false;
+    setShowForm(true);
+  }, []);
+  const closeDetails = useCallback(() => {
+    setDetail(null);
+    if (Platform.OS !== "ios") requestAnimationFrame(showPendingEditor);
+  }, [showPendingEditor]);
+  const [sheetExpanded, setSheetExpanded] = useState(false);
   const [detailImageFailed, setDetailImageFailed] = useState(false);
   useEffect(() => {
-    setImagePreview(false);
+    setSheetExpanded(false);
     setDetailImageFailed(false);
   }, [detail?.id, detail?.imageUri]);
   const [showForm, setShowForm] = useState(false);
@@ -172,6 +188,7 @@ export default function App() {
   const [calendarMonth, setCalendarMonth] = useState(new Date());
   const [clock, setClock] = useState(Date.now());
   const [permission, setPermission] = useState(true);
+  const [onboardingActive, setOnboardingActive] = useState(true);
   const [alarmStatus, setAlarmStatus] = useState(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
@@ -431,7 +448,7 @@ export default function App() {
     async (id) => {
       const current = reminders.find((x) => x.id === id);
       if (!current || current.completed) {
-        setDetail(null);
+        sheetRef.current?.close();
         return;
       }
       await NativeModules.ReminderNative?.clearNotification?.(id);
@@ -474,7 +491,7 @@ export default function App() {
       }
       await saveReminders(updated);
       setReminders(updated);
-      setDetail(null);
+      sheetRef.current?.close();
     },
     [reminders, settings.soundEnabled, detail],
   );
@@ -567,9 +584,12 @@ export default function App() {
       repeat: r.repeat || "none",
       repeatUntil: r.repeatUntil || "",
     });
-    setDetail(null);
-    setShowForm(true);
+    if (detail && sheetRef.current) {
+      pendingEditor.current = true;
+      sheetRef.current.close();
+    } else setShowForm(true);
   };
+  const closeEditor = () => setShowForm(false);
   const submitReminder = async () => {
     const title = form.title.trim();
     if (!title)
@@ -687,7 +707,7 @@ export default function App() {
             const next = reminders.filter((x) => x.id !== r.id);
             await saveReminders(next);
             setReminders(next);
-            setDetail(null);
+            sheetRef.current?.close();
           },
         },
       ],
@@ -735,15 +755,13 @@ export default function App() {
     () => reminderCategories(reminders, new Date(clock)),
     [reminders, clock],
   );
-  const tabRows = categoryRows[filter];
-  const visible = useMemo(() => {
+  const searchedCategories = useMemo(() => {
     const query = deferredSearch.trim().toLowerCase();
-    return query
-      ? tabRows.filter((r) =>
-          (r.title + " " + (r.description || "")).toLowerCase().includes(query),
-        )
-      : tabRows;
-  }, [tabRows, deferredSearch]);
+    return Object.fromEntries(CATEGORY_NAMES.map(category => [category, query
+      ? categoryRows[category].filter(r => (r.title + " " + (r.description || "")).toLowerCase().includes(query))
+      : categoryRows[category]]));
+  }, [categoryRows, deferredSearch]);
+  const visible = searchedCategories[filter];
   const completeSelected = async () => {
     const rows = new Map(
       visible.filter((r) => selectedSet.has(r.id)).map((r) => [r.id, r]),
@@ -774,6 +792,7 @@ export default function App() {
       Alert.alert("Could not complete reminders", e.message);
     }
   };
+  const homeRows = useMemo(() => Object.fromEntries(CATEGORY_NAMES.map(category => [category, [{ id: "header", header: true }, { id: "controls", controls: true }, ...searchedCategories[category]]])), [searchedCategories]);
   const calendarRows = useMemo(
     () => calendarOccurrences(reminders, selectedDate, clock),
     [reminders, selectedDate, clock],
@@ -818,7 +837,7 @@ export default function App() {
     setCalendarMonth(
       (d) => new Date(d.getFullYear(), d.getMonth() + amount, 1),
     );
-  const openReminder = useCallback((item) => setDetail(item), []);
+  const openReminder = useCallback((item) => { setSheetExpanded(false); setDetail(item); }, []);
   const onImport = async () => {
     try {
       const imported = await importReminders();
@@ -872,6 +891,374 @@ export default function App() {
       Alert.alert("Export failed", e.message || "Could not export reminders.");
     }
   };
+  const reminderForm = showForm ? (
+          <SafeAreaView
+            edges={["top", "left", "right", "bottom"]}
+            style={{
+              flex: 1,
+              backgroundColor: palette.bg,
+            }}
+          >
+            <KeyboardAvoidingView
+              style={{
+                flex: 1,
+              }}
+              behavior={Platform.OS === "ios" ? "padding" : undefined}
+            >
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={{
+                  padding: 20,
+                  paddingBottom: 40,
+                }}
+              >
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginBottom: 16,
+                  }}
+                >
+                  <Pressable
+                    onPress={closeEditor}
+                    style={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: 14,
+                      backgroundColor: palette.card,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <X color={palette.text} />
+                  </Pressable>
+                  <Text
+                    style={{
+                      color: palette.text,
+                      fontSize: 20,
+                      fontWeight: "800",
+                    }}
+                  >
+                    {editing ? "Edit reminder" : "New reminder"}
+                  </Text>
+                  <View
+                    style={{
+                      width: 42,
+                    }}
+                  />
+                </View>
+                <Text
+                  style={{
+                    color: palette.muted,
+                    marginBottom: 18,
+                  }}
+                >
+                  A title, a time, and you are all set.
+                </Text>
+                <Label>REMINDER TITLE *</Label>
+                <Field
+                  value={form.title}
+                  onChangeText={(v) =>
+                    setForm((p) => ({
+                      ...p,
+                      title: v,
+                    }))
+                  }
+                  placeholder="e.g. Mom's birthday"
+                />
+                <Label>IMAGE (OPTIONAL)</Label>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 10,
+                  }}
+                >
+                  {form.imageUri && (
+                    <ZoomableImage
+                      uri={form.imageUri}
+                      style={{ width: 46, height: 46, borderRadius: 15 }}
+                    />
+                  )}
+                  <Btn
+                    secondary
+                    title={form.imageUri ? "Change image" : "Choose image"}
+                    onPress={async () => {
+                      try {
+                        const uri = await importReminderImage();
+                        if (uri) setForm((p) => ({ ...p, imageUri: uri }));
+                      } catch (e) {
+                        Alert.alert("Cannot select image", e.message);
+                      }
+                    }}
+                  />
+                  {form.imageUri && (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Remove image"
+                      onPress={() => setForm((p) => ({ ...p, imageUri: null }))}
+                      style={{ padding: 12 }}
+                    >
+                      <Trash2 size={20} color={palette.danger} />
+                    </Pressable>
+                  )}
+                </View>
+                <Label>DESCRIPTION (OPTIONAL)</Label>
+                <Field
+                  value={form.description}
+                  onChangeText={(v) =>
+                    setForm((p) => ({
+                      ...p,
+                      description: v,
+                    }))
+                  }
+                  placeholder="Add a note or a little context…"
+                  multiline
+                />
+                {(form.repeat === "none" || form.repeat === "yearly") && (
+                  <>
+                    <Label>DATE · YYYY-MM-DD</Label>
+                    <Field
+                      value={form.date}
+                      onChangeText={(v) =>
+                        setForm((p) => ({
+                          ...p,
+                          date: v,
+                        }))
+                      }
+                      placeholder="2026-12-24"
+                      keyboardType="numbers-and-punctuation"
+                    />
+                    <Text
+                      style={{
+                        color: palette.muted,
+                        fontSize: 11,
+                        marginTop: 5,
+                      }}
+                    >
+                      Use today or a future date.
+                    </Text>
+                    {NativeModules.ReminderNative && (
+                      <Pressable
+                        accessibilityRole="button"
+                        style={{
+                          paddingVertical: 12,
+                        }}
+                        onPress={async () => {
+                          try {
+                            const date =
+                              await NativeModules.ReminderNative.chooseDate(
+                                validDate(form.date) ? form.date : todayISO(),
+                              );
+                            if (date)
+                              setForm((p) => ({
+                                ...p,
+                                date,
+                              }));
+                          } catch (e) {
+                            Alert.alert("Choose date", e.message);
+                          }
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: palette.brand,
+                            fontWeight: "700",
+                          }}
+                        >
+                          Choose date
+                        </Text>
+                      </Pressable>
+                    )}
+                  </>
+                )}
+                {form.repeat === "weekly" && (
+                  <>
+                    <Label>WEEKDAYS</Label>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        flexWrap: "wrap",
+                        gap: 8,
+                      }}
+                    >
+                      {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
+                        (label, day) => (
+                          <Chip
+                            key={label}
+                            label={label}
+                            active={form.weekdays?.includes(day)}
+                            onPress={() =>
+                              setForm((p) => ({
+                                ...p,
+                                weekdays: p.weekdays?.includes(day)
+                                  ? p.weekdays.filter((d) => d !== day)
+                                  : [...(p.weekdays || []), day],
+                              }))
+                            }
+                          />
+                        ),
+                      )}
+                    </View>
+                  </>
+                )}
+                {form.repeat === "monthly" && (
+                  <>
+                    <Label>DAY OF MONTH · 1–31</Label>
+                    <Field
+                      value={String(form.monthDay || "")}
+                      onChangeText={(v) =>
+                        setForm((p) => ({
+                          ...p,
+                          monthDay: v,
+                        }))
+                      }
+                      keyboardType="number-pad"
+                      placeholder="20"
+                    />
+                    <Text
+                      style={{
+                        color: palette.muted,
+                        marginTop: 6,
+                      }}
+                    >
+                      Months without this day are skipped.
+                    </Text>
+                  </>
+                )}
+                <Label>TIME · 24-HOUR HH:MM</Label>
+                <Field
+                  value={form.time}
+                  onChangeText={(v) =>
+                    setForm((p) => ({
+                      ...p,
+                      time: v,
+                    }))
+                  }
+                  placeholder="09:30"
+                  keyboardType="numbers-and-punctuation"
+                />
+                {NativeModules.ReminderNative && (
+                  <Pressable
+                    accessibilityRole="button"
+                    style={{
+                      paddingVertical: 12,
+                    }}
+                    onPress={async () => {
+                      try {
+                        const time =
+                          await NativeModules.ReminderNative.chooseTime(
+                            /^([01]\d|2[0-3]):[0-5]\d$/.test(form.time)
+                              ? form.time
+                              : timeNow(),
+                          );
+                        if (time)
+                          setForm((p) => ({
+                            ...p,
+                            time,
+                          }));
+                      } catch (e) {
+                        Alert.alert("Choose time", e.message);
+                      }
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: palette.brand,
+                        fontWeight: "700",
+                      }}
+                    >
+                      Choose time
+                    </Text>
+                  </Pressable>
+                )}
+                <Label>REPEAT</Label>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    flexWrap: "wrap",
+                    gap: 8,
+                  }}
+                >
+                  {[
+                    {
+                      v: "none",
+                      l: "Never",
+                    },
+                    {
+                      v: "daily",
+                      l: "Daily",
+                    },
+                    {
+                      v: "weekly",
+                      l: "Weekly",
+                    },
+                    {
+                      v: "monthly",
+                      l: "Monthly",
+                    },
+                    {
+                      v: "yearly",
+                      l: "Yearly",
+                    },
+                  ].map((o) => (
+                    <Chip
+                      key={o.v}
+                      label={o.l}
+                      active={form.repeat === o.v}
+                      onPress={() =>
+                        setForm((p) => ({
+                          ...p,
+                          repeat: o.v,
+                          weekdays: p.weekdays || [
+                            new Date(`${p.date}T12:00:00`).getDay(),
+                          ],
+                          monthDay:
+                            p.monthDay ||
+                            new Date(`${p.date}T12:00:00`).getDate(),
+                        }))
+                      }
+                    />
+                  ))}
+                </View>
+                {form.repeat !== "none" && (
+                  <>
+                    <Label>REPEAT UNTIL (OPTIONAL) · YYYY-MM-DD</Label>
+                    <Field
+                      value={form.repeatUntil}
+                      onChangeText={(v) =>
+                        setForm((p) => ({
+                          ...p,
+                          repeatUntil: v,
+                        }))
+                      }
+                      placeholder="Leave empty to repeat indefinitely"
+                    />
+                  </>
+                )}
+                <View
+                  style={{
+                    marginTop: 26,
+                  }}
+                >
+                  <Btn
+                    title={
+                      busy
+                        ? "Saving…"
+                        : editing
+                          ? "Save changes"
+                          : "Save reminder"
+                    }
+                    onPress={submitReminder}
+                    disabled={busy}
+                    icon={<Check color="white" size={18} />}
+                  />
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </SafeAreaView>
+  ) : null;
   if (loadError)
     return (
       <SafeAreaView
@@ -948,6 +1335,9 @@ export default function App() {
       </SafeAreaView>
     );
   return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <PaletteContext.Provider value={palette}>
+        <ImageViewerScope>
     <SafeAreaView
       style={{
         flex: 1,
@@ -955,9 +1345,9 @@ export default function App() {
       }}
       edges={["top", "left", "right"]}
     >
-      <PaletteContext.Provider value={palette}>
+
         <ExpoStatusBar style={isDark ? "light" : "dark"} />
-        {(!permission || alarmStatus?.exact === false) && !bannerDismissed && (
+        {(!permission || alarmStatus?.exact === false) && !bannerDismissed && !onboardingActive && (
           <PermissionBanner
             message={
               !permission
@@ -985,17 +1375,17 @@ export default function App() {
           />
         )}
         <View
+          accessibilityElementsHidden={onboardingActive}
+          importantForAccessibility={onboardingActive ? "no-hide-descendants" : "auto"}
           style={{
             flex: 1,
           }}
         >
-          {tab === "Home" && (
+          <TabPager tab={tab} onChange={setTab}>
+          <View style={{ flex: 1 }}>
             <FlatList
-              data={[
-                { id: "header", header: true },
-                { id: "controls", controls: true },
-                ...visible,
-              ]}
+              boundaryInset={tabBarHeight}
+              data={homeRows[filter]}
               stickyHeaderIndices={[1]}
               keyExtractor={(item) =>
                 item.header
@@ -1348,11 +1738,12 @@ export default function App() {
                 )
               }
             />
-          )}
+          </View>
 
-          {tab === "Calendar" && (
+          <View style={{ flex: 1 }}>
             <View style={{ flex: 1 }}>
               <FlatList
+              boundaryInset={tabBarHeight}
                 data={calendarRows}
                 keyExtractor={(item) => item.id}
                 renderItem={({ item }) => (
@@ -1596,10 +1987,11 @@ export default function App() {
                 }
               />
             </View>
-          )}
+          </View>
 
-          {tab === "Settings" && (
+          <View style={{ flex: 1 }}>
             <ScrollView
+              boundaryInset={tabBarHeight}
               contentContainerStyle={{
                 padding: 20,
                 paddingBottom: 110,
@@ -1851,9 +2243,11 @@ export default function App() {
                 </Pressable>
               </Card>
             </ScrollView>
-          )}
+          </View>
+          </TabPager>
 
           <View
+            onLayout={e => setTabBarHeight(e.nativeEvent.layout.height)}
             style={{
               position: "absolute",
               bottom: 0,
@@ -1887,12 +2281,15 @@ export default function App() {
               return (
                 <Pressable
                   key={x.name}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: active }}
                   onPress={() => setTab(x.name)}
-                  style={{
+                  style={({ pressed }) => ({
+                    opacity: pressed ? 0.65 : 1,
                     alignItems: "center",
                     gap: 4,
                     minWidth: 70,
-                  }}
+                  })}
                 >
                   <I size={21} color={active ? palette.brand : palette.muted} />
                   <Text
@@ -1910,377 +2307,10 @@ export default function App() {
           </View>
         </View>
 
-        <Modal
-          visible={showForm}
-          animationType="slide"
-          presentationStyle="pageSheet"
-          onRequestClose={() => setShowForm(false)}
-        >
-          <SafeAreaView
-            style={{
-              flex: 1,
-              backgroundColor: palette.bg,
-            }}
-          >
-            <KeyboardAvoidingView
-              style={{
-                flex: 1,
-              }}
-              behavior={Platform.OS === "ios" ? "padding" : undefined}
-            >
-              <ScrollView
-                keyboardShouldPersistTaps="handled"
-                contentContainerStyle={{
-                  padding: 20,
-                  paddingBottom: 40,
-                }}
-              >
-                <View
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    marginBottom: 16,
-                  }}
-                >
-                  <Pressable
-                    onPress={() => setShowForm(false)}
-                    style={{
-                      width: 42,
-                      height: 42,
-                      borderRadius: 14,
-                      backgroundColor: palette.card,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <X color={palette.text} />
-                  </Pressable>
-                  <Text
-                    style={{
-                      color: palette.text,
-                      fontSize: 20,
-                      fontWeight: "800",
-                    }}
-                  >
-                    {editing ? "Edit reminder" : "New reminder"}
-                  </Text>
-                  <View
-                    style={{
-                      width: 42,
-                    }}
-                  />
-                </View>
-                <Text
-                  style={{
-                    color: palette.muted,
-                    marginBottom: 18,
-                  }}
-                >
-                  A title, a time, and you are all set.
-                </Text>
-                <Label>REMINDER TITLE *</Label>
-                <Field
-                  value={form.title}
-                  onChangeText={(v) =>
-                    setForm((p) => ({
-                      ...p,
-                      title: v,
-                    }))
-                  }
-                  placeholder="e.g. Mom's birthday"
-                />
-                <Label>IMAGE (OPTIONAL)</Label>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: 10,
-                  }}
-                >
-                  {form.imageUri && (
-                    <Image
-                      source={{ uri: form.imageUri }}
-                      style={{ width: 46, height: 46, borderRadius: 15 }}
-                    />
-                  )}
-                  <Btn
-                    secondary
-                    title={form.imageUri ? "Change image" : "Choose image"}
-                    onPress={async () => {
-                      try {
-                        const uri = await importReminderImage();
-                        if (uri) setForm((p) => ({ ...p, imageUri: uri }));
-                      } catch (e) {
-                        Alert.alert("Cannot select image", e.message);
-                      }
-                    }}
-                  />
-                  {form.imageUri && (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Remove image"
-                      onPress={() => setForm((p) => ({ ...p, imageUri: null }))}
-                      style={{ padding: 12 }}
-                    >
-                      <Trash2 size={20} color={palette.danger} />
-                    </Pressable>
-                  )}
-                </View>
-                <Label>DESCRIPTION (OPTIONAL)</Label>
-                <Field
-                  value={form.description}
-                  onChangeText={(v) =>
-                    setForm((p) => ({
-                      ...p,
-                      description: v,
-                    }))
-                  }
-                  placeholder="Add a note or a little context…"
-                  multiline
-                />
-                {(form.repeat === "none" || form.repeat === "yearly") && (
-                  <>
-                    <Label>DATE · YYYY-MM-DD</Label>
-                    <Field
-                      value={form.date}
-                      onChangeText={(v) =>
-                        setForm((p) => ({
-                          ...p,
-                          date: v,
-                        }))
-                      }
-                      placeholder="2026-12-24"
-                      keyboardType="numbers-and-punctuation"
-                    />
-                    <Text
-                      style={{
-                        color: palette.muted,
-                        fontSize: 11,
-                        marginTop: 5,
-                      }}
-                    >
-                      Use today or a future date.
-                    </Text>
-                    {NativeModules.ReminderNative && (
-                      <Pressable
-                        accessibilityRole="button"
-                        style={{
-                          paddingVertical: 12,
-                        }}
-                        onPress={async () => {
-                          try {
-                            const date =
-                              await NativeModules.ReminderNative.chooseDate(
-                                validDate(form.date) ? form.date : todayISO(),
-                              );
-                            if (date)
-                              setForm((p) => ({
-                                ...p,
-                                date,
-                              }));
-                          } catch (e) {
-                            Alert.alert("Choose date", e.message);
-                          }
-                        }}
-                      >
-                        <Text
-                          style={{
-                            color: palette.brand,
-                            fontWeight: "700",
-                          }}
-                        >
-                          Choose date
-                        </Text>
-                      </Pressable>
-                    )}
-                  </>
-                )}
-                {form.repeat === "weekly" && (
-                  <>
-                    <Label>WEEKDAYS</Label>
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        flexWrap: "wrap",
-                        gap: 8,
-                      }}
-                    >
-                      {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
-                        (label, day) => (
-                          <Chip
-                            key={label}
-                            label={label}
-                            active={form.weekdays?.includes(day)}
-                            onPress={() =>
-                              setForm((p) => ({
-                                ...p,
-                                weekdays: p.weekdays?.includes(day)
-                                  ? p.weekdays.filter((d) => d !== day)
-                                  : [...(p.weekdays || []), day],
-                              }))
-                            }
-                          />
-                        ),
-                      )}
-                    </View>
-                  </>
-                )}
-                {form.repeat === "monthly" && (
-                  <>
-                    <Label>DAY OF MONTH · 1–31</Label>
-                    <Field
-                      value={String(form.monthDay || "")}
-                      onChangeText={(v) =>
-                        setForm((p) => ({
-                          ...p,
-                          monthDay: v,
-                        }))
-                      }
-                      keyboardType="number-pad"
-                      placeholder="20"
-                    />
-                    <Text
-                      style={{
-                        color: palette.muted,
-                        marginTop: 6,
-                      }}
-                    >
-                      Months without this day are skipped.
-                    </Text>
-                  </>
-                )}
-                <Label>TIME · 24-HOUR HH:MM</Label>
-                <Field
-                  value={form.time}
-                  onChangeText={(v) =>
-                    setForm((p) => ({
-                      ...p,
-                      time: v,
-                    }))
-                  }
-                  placeholder="09:30"
-                  keyboardType="numbers-and-punctuation"
-                />
-                {NativeModules.ReminderNative && (
-                  <Pressable
-                    accessibilityRole="button"
-                    style={{
-                      paddingVertical: 12,
-                    }}
-                    onPress={async () => {
-                      try {
-                        const time =
-                          await NativeModules.ReminderNative.chooseTime(
-                            /^([01]\d|2[0-3]):[0-5]\d$/.test(form.time)
-                              ? form.time
-                              : timeNow(),
-                          );
-                        if (time)
-                          setForm((p) => ({
-                            ...p,
-                            time,
-                          }));
-                      } catch (e) {
-                        Alert.alert("Choose time", e.message);
-                      }
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: palette.brand,
-                        fontWeight: "700",
-                      }}
-                    >
-                      Choose time
-                    </Text>
-                  </Pressable>
-                )}
-                <Label>REPEAT</Label>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    flexWrap: "wrap",
-                    gap: 8,
-                  }}
-                >
-                  {[
-                    {
-                      v: "none",
-                      l: "Never",
-                    },
-                    {
-                      v: "daily",
-                      l: "Daily",
-                    },
-                    {
-                      v: "weekly",
-                      l: "Weekly",
-                    },
-                    {
-                      v: "monthly",
-                      l: "Monthly",
-                    },
-                    {
-                      v: "yearly",
-                      l: "Yearly",
-                    },
-                  ].map((o) => (
-                    <Chip
-                      key={o.v}
-                      label={o.l}
-                      active={form.repeat === o.v}
-                      onPress={() =>
-                        setForm((p) => ({
-                          ...p,
-                          repeat: o.v,
-                          weekdays: p.weekdays || [
-                            new Date(`${p.date}T12:00:00`).getDay(),
-                          ],
-                          monthDay:
-                            p.monthDay ||
-                            new Date(`${p.date}T12:00:00`).getDate(),
-                        }))
-                      }
-                    />
-                  ))}
-                </View>
-                {form.repeat !== "none" && (
-                  <>
-                    <Label>REPEAT UNTIL (OPTIONAL) · YYYY-MM-DD</Label>
-                    <Field
-                      value={form.repeatUntil}
-                      onChangeText={(v) =>
-                        setForm((p) => ({
-                          ...p,
-                          repeatUntil: v,
-                        }))
-                      }
-                      placeholder="Leave empty to repeat indefinitely"
-                    />
-                  </>
-                )}
-                <View
-                  style={{
-                    marginTop: 26,
-                  }}
-                >
-                  <Btn
-                    title={
-                      busy
-                        ? "Saving…"
-                        : editing
-                          ? "Save changes"
-                          : "Save reminder"
-                    }
-                    onPress={submitReminder}
-                    disabled={busy}
-                    icon={<Check color="white" size={18} />}
-                  />
-                </View>
-              </ScrollView>
-            </KeyboardAvoidingView>
-          </SafeAreaView>
+        <Modal visible={showForm} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => { if (!formViewerRef.current?.closeIfOpen()) closeEditor(); }}>
+          <GestureHandlerRootView style={{ flex: 1 }}>
+            <ImageViewerScope ref={formViewerRef}>{showForm ? reminderForm : null}</ImageViewerScope>
+          </GestureHandlerRootView>
         </Modal>
 
         <Modal
@@ -2600,27 +2630,7 @@ export default function App() {
             </ScrollView>
           </SafeAreaView>
         </Modal>
-        <Modal
-          visible={Boolean(detail)}
-          transparent
-          animationType="fade"
-          onRequestClose={() =>
-            imagePreview ? setImagePreview(false) : setDetail(null)
-          }
-        >
-          <View
-            style={{
-              flex: 1,
-              backgroundColor: "#0008",
-              justifyContent: "flex-end",
-            }}
-          >
-            <Pressable
-              onPress={() => setDetail(null)}
-              style={{
-                flex: 1,
-              }}
-            />
+        <ReminderSheet ref={sheetRef} item={detail} expanded={sheetExpanded} onClose={closeDetails} onDismiss={showPendingEditor} onExpand={() => setSheetExpanded(true)} onCollapse={() => setSheetExpanded(false)}>
             <View
               style={{
                 backgroundColor: palette.bg,
@@ -2663,21 +2673,8 @@ export default function App() {
                     {detail?.title}
                   </Text>
                 </View>
-                {detail?.imageUri && !detailImageFailed && (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="View reminder image"
-                    onPress={() => setImagePreview(true)}
-                    style={{ marginRight: 12 }}
-                  >
-                    <Image
-                      source={{ uri: detail.imageUri }}
-                      onError={() => setDetailImageFailed(true)}
-                      style={{ width: 46, height: 46, borderRadius: 15 }}
-                    />
-                  </Pressable>
-                )}
-                <Pressable onPress={() => setDetail(null)}>
+                {detail?.imageUri && !detailImageFailed && <ZoomableImage uri={detail.imageUri} onError={() => setDetailImageFailed(true)} style={{ width: 46, height: 46, borderRadius: 15, marginRight: 12 }} />}
+                <Pressable onPress={() => sheetRef.current?.close()}>
                   <X color={palette.text} />
                 </Pressable>
               </View>
@@ -2750,6 +2747,9 @@ export default function App() {
                   {detail.repeatUntil ? ` until ${detail.repeatUntil}` : ""}
                 </Text>
               ) : null}
+              {detail?.imageUri && !detailImageFailed && <View style={{ marginBottom: 18, alignItems: "flex-start" }}>
+                <ZoomableImage uri={detail.imageUri} onError={() => setDetailImageFailed(true)} style={{ width: 180, height: 180, borderRadius: 15 }} />
+              </View>}
               {!detail?.completed && (
                 <View
                   style={{
@@ -2794,71 +2794,19 @@ export default function App() {
                 </View>
               </View>
             </View>
-            {imagePreview && detail?.imageUri && (
-              <View
-                accessibilityViewIsModal
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  backgroundColor: "#000D",
-                }}
-              >
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Close image preview"
-                  onPress={() => setImagePreview(false)}
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                  }}
-                />
-                <View
-                  pointerEvents="box-none"
-                  style={{
-                    flex: 1,
-                    alignItems: "center",
-                    justifyContent: "center",
-                    padding: 24,
-                  }}
-                >
-                  <ReminderImagePreview uri={detail.imageUri} />
-                </View>
-                <SafeAreaView
-                  pointerEvents="box-none"
-                  style={{ position: "absolute", top: 0, right: 0 }}
-                >
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Close image preview"
-                    onPress={() => setImagePreview(false)}
-                    style={{
-                      margin: 16,
-                      width: 44,
-                      height: 44,
-                      borderRadius: 22,
-                      backgroundColor: palette.card,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <X color={palette.text} size={24} />
-                  </Pressable>
-                </SafeAreaView>
-              </View>
-            )}
-          </View>
-        </Modal>
+        </ReminderSheet>
         <AppDialog dialog={dialog} onClose={closeDialog} />
-      </PaletteContext.Provider>
+        <PermissionOnboarding onNotificationChange={setPermission} onActiveChange={setOnboardingActive} />
     </SafeAreaView>
+        </ImageViewerScope>
+      </PaletteContext.Provider>
+    </GestureHandlerRootView>
   );
 }
+export default function App() {
+  return <SafeAreaProvider><ReminderApp /></SafeAreaProvider>;
+}
+
 function SettingRow({
   palette,
   icon,
