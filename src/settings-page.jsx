@@ -60,8 +60,8 @@ export const SettingsPage = React.memo(function SettingsPage({ Alert, alarmStatu
                     <SettingsToggle
                       label="Dark Mode"
                       value={isDark}
-                      onValueChange={(value) =>
-                        updateSettings({ theme: value ? "dark" : "light" })
+                      onValueChange={() =>
+                        updateSettings({ theme: current => current === "dark" ? "light" : "dark" })
                       }
                     />
                   }

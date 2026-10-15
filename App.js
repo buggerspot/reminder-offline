@@ -105,12 +105,21 @@ import {
 } from "./src/components";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import {
-  TabPager, PremiumFlatList as FlatList, PremiumScrollView as ScrollView,
-  ImageViewerScope, ZoomableImage,
+  TabPager,
+  PremiumFlatList as FlatList,
+  PremiumScrollView as ScrollView,
+  ImageViewerScope,
+  ZoomableImage,
 } from "./src/interaction-components";
 import { PermissionOnboarding } from "./src/permission-onboarding";
 import { CATEGORY_NAMES, TAB_NAMES } from "./src/lib/interactions";
-import { createReminderPresentation, createTabNavigation, createCategorySelection, createEditorPresentation, createDialogQueue } from "./src/lib/presentation";
+import {
+  createReminderPresentation,
+  createTabNavigation,
+  createCategorySelection,
+  createEditorPresentation,
+  createDialogQueue,
+} from "./src/lib/presentation";
 import { ReminderDetails } from "./src/reminder-details";
 import { MainTabBar } from "./src/main-tab-bar";
 import { HomeReminders } from "./src/home-reminders";
@@ -160,13 +169,16 @@ function ReminderApp() {
   const [loadAttempt, setLoadAttempt] = useState(0);
   const dataReady = useRef(false);
   const [navigation] = useState(() => createTabNavigation(TAB_NAMES));
-  const setTab = useCallback(name => navigation.navigate(name), [navigation]);
-  const onTabBarLayout = useCallback(e => setTabBarHeight(e.nativeEvent.layout.height), []);
+  const setTab = useCallback((name) => navigation.navigate(name), [navigation]);
+  const onTabBarLayout = useCallback(
+    (e) => setTabBarHeight(e.nativeEvent.layout.height),
+    [],
+  );
   const [tabBarHeight, setTabBarHeight] = useState(60);
   const [categories] = useState(() => createCategorySelection(CATEGORY_NAMES));
   const [editor] = useState(createEditorPresentation);
   const [details] = useState(createReminderPresentation);
-  const setDetail = useCallback(value => details.set(value), [details]);
+  const setDetail = useCallback((value) => details.set(value), [details]);
   const sheetRef = useRef(null);
   const pendingEditor = useRef(false);
   const showPendingEditor = useCallback(() => {
@@ -198,14 +210,29 @@ function ReminderApp() {
   const reminderRef = useRef(reminders);
   reminderRef.current = reminders;
   const settingsRef = useRef(settings);
-  settingsRef.current = settings;
+
   const migratedNotifications = useRef(false);
   const [dialogs] = useState(createDialogQueue);
   const Alert = useMemo(() => ({ alert: dialogs.alert }), [dialogs]);
-  const clearSelection = useCallback(() => setSelectedIds(ids => ids.length ? [] : ids), []);
+  const clearSelection = useCallback(
+    () => setSelectedIds((ids) => (ids.length ? [] : ids)),
+    [],
+  );
   const selectionMode = selectedIds.length > 0;
-  useEffect(() => navigation.subscribe(() => setSelectedIds(ids => ids.length ? [] : ids)), [navigation]);
-  useEffect(() => categories.subscribe(() => setSelectedIds(ids => ids.length ? [] : ids)), [categories]);
+  useEffect(
+    () =>
+      navigation.subscribe(() =>
+        setSelectedIds((ids) => (ids.length ? [] : ids)),
+      ),
+    [navigation],
+  );
+  useEffect(
+    () =>
+      categories.subscribe(() =>
+        setSelectedIds((ids) => (ids.length ? [] : ids)),
+      ),
+    [categories],
+  );
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   useEffect(() => {
     setSelectedIds([]);
@@ -240,7 +267,8 @@ function ReminderApp() {
           },
     [isDark],
   );
-  useLayoutEffect(() => {
+  useEffect(() => {
+    // Commit palette colors before updating native window appearance.
     Appearance.setColorScheme(settings.theme);
   }, [settings.theme]);
   useEffect(() => {
@@ -253,6 +281,7 @@ function ReminderApp() {
       if (retained !== r) await saveReminders(retained);
       setReminders(retained);
       dataReady.current = true;
+      settingsRef.current = s;
       setSettings(s);
       setSounds(await loadSounds());
       setPermission(await configureNotifications(s.soundEnabled));
@@ -497,6 +526,8 @@ function ReminderApp() {
   }, [markComplete, reminders, loaded]);
   const updateSettings = async (patch) => {
     const previous = settingsRef.current;
+    if (typeof patch.theme === "function")
+      patch = { ...patch, theme: patch.theme(previous.theme) };
     const next = {
       ...settingsRef.current,
       ...patch,
@@ -509,8 +540,9 @@ function ReminderApp() {
       await saveSettings(next);
     } catch (e) {
       if (settingsRef.current === next) {
-        settingsRef.current = previous;
-        setSettings(previous);
+        // A failed write must not undo the user's appearance selection.
+        settingsRef.current = { ...previous, theme: next.theme };
+        setSettings(settingsRef.current);
         setForegroundNotificationSound(previous.soundEnabled);
       }
       Alert.alert(
@@ -559,34 +591,34 @@ function ReminderApp() {
   const persistReminder = async (form, editing) => {
     const title = form.title.trim();
 
-      if (editing?.notificationId)
-        await cancelReminderNotification(editing.notificationId);
-      const item = {
-        id: editing?.id || makeId(),
-        title,
-        imageUri: form.imageUri || null,
-        description: form.description.trim(),
-        date: form.date,
-        time: form.time,
-        repeat: form.repeat,
-        weekdays: form.weekdays,
-        monthDay: Number(form.monthDay),
-        soundId: settings.defaultSoundId || null,
-        soundUri:
-          sounds.find((s) => s.id === settings.defaultSoundId)?.uri || null,
-        completedDateTimes: editing?.completedDateTimes || {},
-        completedDates: editing?.completedDates || [],
-        repeatUntil: form.repeatUntil,
-        completed: false,
-        createdAt: editing?.createdAt || new Date().toISOString(),
-        notificationId: null,
-      };
-      item.notificationId = await scheduleReminder(item, settings.soundEnabled);
-      const next = editing
-        ? reminderRef.current.map((r) => (r.id === editing.id ? item : r))
-        : [...reminderRef.current, item];
-      await saveReminders(next);
-      setReminders(next);
+    if (editing?.notificationId)
+      await cancelReminderNotification(editing.notificationId);
+    const item = {
+      id: editing?.id || makeId(),
+      title,
+      imageUri: form.imageUri || null,
+      description: form.description.trim(),
+      date: form.date,
+      time: form.time,
+      repeat: form.repeat,
+      weekdays: form.weekdays,
+      monthDay: Number(form.monthDay),
+      soundId: settings.defaultSoundId || null,
+      soundUri:
+        sounds.find((s) => s.id === settings.defaultSoundId)?.uri || null,
+      completedDateTimes: editing?.completedDateTimes || {},
+      completedDates: editing?.completedDates || [],
+      repeatUntil: form.repeatUntil,
+      completed: false,
+      createdAt: editing?.createdAt || new Date().toISOString(),
+      notificationId: null,
+    };
+    item.notificationId = await scheduleReminder(item, settings.soundEnabled);
+    const next = editing
+      ? reminderRef.current.map((r) => (r.id === editing.id ? item : r))
+      : [...reminderRef.current, item];
+    await saveReminders(next);
+    setReminders(next);
   };
   const deleteReminder = (r) =>
     Alert.alert(
@@ -634,7 +666,9 @@ function ReminderApp() {
               const next = deleteSelected(
                 reminderRef.current,
                 deletedIds,
-                navigation.getSnapshot() === "Home" ? categories.getSnapshot() : "Calendar",
+                navigation.getSnapshot() === "Home"
+                  ? categories.getSnapshot()
+                  : "Calendar",
               );
               for (const r of reminders.filter((r) => deletedIds.has(r.id))) {
                 await NativeModules.ReminderNative?.clearNotification?.(r.id);
@@ -692,7 +726,10 @@ function ReminderApp() {
   );
   useEffect(() => {
     const available = new Set(
-      (navigation.getSnapshot() === "Calendar" ? calendarRows : categoryRows[categories.getSnapshot()]).map((r) => r.id),
+      (navigation.getSnapshot() === "Calendar"
+        ? calendarRows
+        : categoryRows[categories.getSnapshot()]
+      ).map((r) => r.id),
     );
     setSelectedIds((ids) =>
       ids.every((id) => available.has(id))
@@ -730,7 +767,12 @@ function ReminderApp() {
     setCalendarMonth(
       (d) => new Date(d.getFullYear(), d.getMonth() + amount, 1),
     );
-  const openReminder = useCallback(item => { details.open(item); }, [details]);
+  const openReminder = useCallback(
+    (item) => {
+      details.open(item);
+    },
+    [details],
+  );
   const onImport = async () => {
     try {
       const imported = await importReminders();
@@ -785,7 +827,20 @@ function ReminderApp() {
     }
   };
 
-  const actions = useStableCallbacks({ updateSettings, openNew, openEdit, persistReminder, deleteReminder, toggleSelection, deleteMany, completeSelected, moveMonth, onImport, exportWith, markComplete });
+  const actions = useStableCallbacks({
+    updateSettings,
+    openNew,
+    openEdit,
+    persistReminder,
+    deleteReminder,
+    toggleSelection,
+    deleteMany,
+    completeSelected,
+    moveMonth,
+    onImport,
+    exportWith,
+    markComplete,
+  });
   if (loadError)
     return (
       <SafeAreaView
@@ -865,134 +920,222 @@ function ReminderApp() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <PaletteContext.Provider value={palette}>
         <ImageViewerScope>
-    <SafeAreaView
-      style={{
-        flex: 1,
-        backgroundColor: palette.bg,
-      }}
-      edges={["top", "left", "right"]}
-    >
-
-        <ExpoStatusBar style={isDark ? "light" : "dark"} />
-        {(!permission || alarmStatus?.exact === false) && !bannerDismissed && !onboardingActive && (
-          <PermissionBanner
-            message={
-              !permission
-                ? "Enable notifications to receive your reminders on time."
-                : "Enable precise alarms for reminders to trigger on time. Without this setting, reminders may be slightly delayed."
-            }
-            actionTitle={
-              !permission ? "Enable Notifications" : "Enable precise timing"
-            }
-            onDismiss={() => setBannerDismissed(true)}
-            onEnable={async () => {
-              try {
-                if (NativeModules.ReminderNative)
-                  await NativeModules.ReminderNative.openSettings(
-                    !permission ? "notifications" : "alarms",
-                  );
-                else await Linking.openSettings();
-              } catch {
-                Alert.alert(
-                  "Notification settings",
-                  "Open this app in system Settings and enable notifications.",
-                );
-              }
-            }}
-          />
-        )}
-        <View
-          accessibilityElementsHidden={onboardingActive}
-          importantForAccessibility={onboardingActive ? "no-hide-descendants" : "auto"}
-          style={{
-            flex: 1,
-          }}
-        >
-          <TabPager navigation={navigation}>
-          <View style={{ flex: 1 }}>
-            <HomeReminders categories={categories} C={C} categoryRows={categoryRows} completeSelected={actions.completeSelected} deleteMany={actions.deleteMany} openNew={actions.openNew} openReminder={openReminder} reminders={reminders} onSearchChange={clearSelection} selectedIds={selectedIds} selectedSet={selectedSet} selectionMode={selectionMode} setSelectedIds={setSelectedIds} setTab={setTab} tabBarHeight={tabBarHeight} toggleSelection={actions.toggleSelection} />
-          </View>
-
-          <View style={{ flex: 1 }}>
-            <CalendarPage calendarDays={calendarDays} calendarMarks={calendarMarks} calendarMonth={calendarMonth} calendarRows={calendarRows} dateChosen={dateChosen} deleteMany={actions.deleteMany} moveMonth={actions.moveMonth} openNew={actions.openNew} openReminder={openReminder} selectedDate={selectedDate} selectedIds={selectedIds} selectedSet={selectedSet} selectionMode={selectionMode} setCalendarMonth={setCalendarMonth} setDateChosen={setDateChosen} setSelectedDate={setSelectedDate} setSelectedIds={setSelectedIds} tabBarHeight={tabBarHeight} todayISO={todayISO} toggleSelection={actions.toggleSelection} />
-          </View>
-
-          <View style={{ flex: 1 }}>
-            <SettingsPage Alert={Alert} alarmStatus={alarmStatus} exportWith={actions.exportWith} onImport={actions.onImport} setShowPrivacy={setShowPrivacy} setShowSounds={setShowSounds} settings={settings} sounds={sounds} tabBarHeight={tabBarHeight} updateSettings={actions.updateSettings} />
-          </View>
-          </TabPager>
-
-          <MainTabBar navigation={navigation} onLayout={onTabBarLayout} />
-        </View>
-
-        <ReminderEditor controller={editor} onSave={actions.persistReminder} Alert={Alert} todayISO={todayISO} timeNow={timeNow} />
-
-        <ReminderSounds visible={showSounds} onClose={closeSounds} sounds={sounds} setSounds={setSounds} settings={settings} updateSettings={actions.updateSettings} Alert={Alert} C={C} />
-        <Modal
-          visible={showPrivacy}
-          animationType="slide"
-          onRequestClose={() => setShowPrivacy(false)}
-        >
-          {showPrivacy ? <SafeAreaView
+          <SafeAreaView
             style={{
               flex: 1,
               backgroundColor: palette.bg,
             }}
+            edges={["top", "left", "right"]}
           >
-            <ScrollView
-              contentContainerStyle={{
-                padding: 20,
+            <ExpoStatusBar style={isDark ? "light" : "dark"} />
+            {(!permission || alarmStatus?.exact === false) &&
+              !bannerDismissed &&
+              !onboardingActive && (
+                <PermissionBanner
+                  message={
+                    !permission
+                      ? "Enable notifications to receive your reminders on time."
+                      : "Enable precise alarms for reminders to trigger on time. Without this setting, reminders may be slightly delayed."
+                  }
+                  actionTitle={
+                    !permission
+                      ? "Enable Notifications"
+                      : "Enable precise timing"
+                  }
+                  onDismiss={() => setBannerDismissed(true)}
+                  onEnable={async () => {
+                    try {
+                      if (NativeModules.ReminderNative)
+                        await NativeModules.ReminderNative.openSettings(
+                          !permission ? "notifications" : "alarms",
+                        );
+                      else await Linking.openSettings();
+                    } catch {
+                      Alert.alert(
+                        "Notification settings",
+                        "Open this app in system Settings and enable notifications.",
+                      );
+                    }
+                  }}
+                />
+              )}
+            <View
+              accessibilityElementsHidden={onboardingActive}
+              importantForAccessibility={
+                onboardingActive ? "no-hide-descendants" : "auto"
+              }
+              style={{
+                flex: 1,
               }}
             >
-              <Btn
-                secondary
-                title="Close"
-                onPress={() => setShowPrivacy(false)}
-              />
-              <Text
-                style={{
-                  color: palette.text,
-                  fontSize: 26,
-                  fontWeight: "800",
-                  marginVertical: 20,
-                }}
-              >
-                Privacy Policy
-              </Text>
-              <Text
-                style={{
-                  color: palette.text,
-                  lineHeight: 24,
-                }}
-              >
-                Offline Reminder stores your reminders, preferences, reminder
-                images and imported audio files locally on your device. The app
-                does not require an account and does not send this data to a
-                backend, analytics or advertising service. Notifications are
-                scheduled through your operating system. Audio files are
-                accessed only when you choose them using the system file picker,
-                and a private copy is saved in app storage. Exporting a backup
-                shares the reminder data with the destination you select; images
-                and imported audio are not included. Android device backup may
-                include app data according to your system backup settings. You
-                can delete reminders and imported sounds in the app, or clear
-                all app data in system settings. Uninstalling the app removes
-                its local private data. Keep your backups safe: they can contain
-                personal information. This policy applies to version 1.0.0.
-                Updated October 13, 2026.
-              </Text>
-            </ScrollView>
-          </SafeAreaView> : null}
-        </Modal>
-        <ReminderDetails presentation={details} sheetRef={sheetRef} onClose={closeDetails} onDismiss={showPendingEditor} markComplete={actions.markComplete} openEdit={actions.openEdit} deleteReminder={actions.deleteReminder} />
-        <DialogPresenter controller={dialogs} />
-        <PermissionOnboarding onNotificationChange={setPermission} onActiveChange={setOnboardingActive} />
-    </SafeAreaView>
+              <TabPager navigation={navigation}>
+                <View style={{ flex: 1 }}>
+                  <HomeReminders
+                    categories={categories}
+                    C={C}
+                    categoryRows={categoryRows}
+                    completeSelected={actions.completeSelected}
+                    deleteMany={actions.deleteMany}
+                    openNew={actions.openNew}
+                    openReminder={openReminder}
+                    reminders={reminders}
+                    onSearchChange={clearSelection}
+                    selectedIds={selectedIds}
+                    selectedSet={selectedSet}
+                    selectionMode={selectionMode}
+                    setSelectedIds={setSelectedIds}
+                    setTab={setTab}
+                    tabBarHeight={tabBarHeight}
+                    toggleSelection={actions.toggleSelection}
+                  />
+                </View>
+
+                <View style={{ flex: 1 }}>
+                  <CalendarPage
+                    calendarDays={calendarDays}
+                    calendarMarks={calendarMarks}
+                    calendarMonth={calendarMonth}
+                    calendarRows={calendarRows}
+                    dateChosen={dateChosen}
+                    deleteMany={actions.deleteMany}
+                    moveMonth={actions.moveMonth}
+                    openNew={actions.openNew}
+                    openReminder={openReminder}
+                    selectedDate={selectedDate}
+                    selectedIds={selectedIds}
+                    selectedSet={selectedSet}
+                    selectionMode={selectionMode}
+                    setCalendarMonth={setCalendarMonth}
+                    setDateChosen={setDateChosen}
+                    setSelectedDate={setSelectedDate}
+                    setSelectedIds={setSelectedIds}
+                    tabBarHeight={tabBarHeight}
+                    todayISO={todayISO}
+                    toggleSelection={actions.toggleSelection}
+                  />
+                </View>
+
+                <View style={{ flex: 1 }}>
+                  <SettingsPage
+                    Alert={Alert}
+                    alarmStatus={alarmStatus}
+                    exportWith={actions.exportWith}
+                    onImport={actions.onImport}
+                    setShowPrivacy={setShowPrivacy}
+                    setShowSounds={setShowSounds}
+                    settings={settings}
+                    sounds={sounds}
+                    tabBarHeight={tabBarHeight}
+                    updateSettings={actions.updateSettings}
+                  />
+                </View>
+              </TabPager>
+
+              <MainTabBar navigation={navigation} onLayout={onTabBarLayout} />
+            </View>
+
+            <ReminderEditor
+              controller={editor}
+              onSave={actions.persistReminder}
+              Alert={Alert}
+              todayISO={todayISO}
+              timeNow={timeNow}
+            />
+
+            <ReminderSounds
+              visible={showSounds}
+              onClose={closeSounds}
+              sounds={sounds}
+              setSounds={setSounds}
+              settings={settings}
+              updateSettings={actions.updateSettings}
+              Alert={Alert}
+              C={C}
+            />
+            <Modal
+              visible={showPrivacy}
+              animationType="slide"
+              onRequestClose={() => setShowPrivacy(false)}
+            >
+              {showPrivacy ? (
+                <SafeAreaView
+                  style={{
+                    flex: 1,
+                    backgroundColor: palette.bg,
+                  }}
+                >
+                  <ScrollView
+                    contentContainerStyle={{
+                      padding: 20,
+                    }}
+                  >
+                    <Btn
+                      secondary
+                      title="Close"
+                      onPress={() => setShowPrivacy(false)}
+                    />
+                    <Text
+                      style={{
+                        color: palette.text,
+                        fontSize: 26,
+                        fontWeight: "800",
+                        marginVertical: 20,
+                      }}
+                    >
+                      Privacy Policy
+                    </Text>
+                    <Text
+                      style={{
+                        color: palette.text,
+                        lineHeight: 24,
+                      }}
+                    >
+                      Offline Reminder stores your reminders, preferences,
+                      reminder images and imported audio files locally on your
+                      device. The app does not require an account and does not
+                      send this data to a backend, analytics or advertising
+                      service. Notifications are scheduled through your
+                      operating system. Audio files are accessed only when you
+                      choose them using the system file picker, and a private
+                      copy is saved in app storage. Exporting a backup shares
+                      the reminder data with the destination you select; images
+                      and imported audio are not included. Android device backup
+                      may include app data according to your system backup
+                      settings. You can delete reminders and imported sounds in
+                      the app, or clear all app data in system settings.
+                      Uninstalling the app removes its local private data. Keep
+                      your backups safe: they can contain personal information.
+                      This policy applies to version 1.0.0. Updated October 13,
+                      2026.
+                    </Text>
+                  </ScrollView>
+                </SafeAreaView>
+              ) : null}
+            </Modal>
+            <ReminderDetails
+              presentation={details}
+              sheetRef={sheetRef}
+              onClose={closeDetails}
+              onDismiss={showPendingEditor}
+              markComplete={actions.markComplete}
+              openEdit={actions.openEdit}
+              deleteReminder={actions.deleteReminder}
+            />
+            <DialogPresenter controller={dialogs} />
+            <PermissionOnboarding
+              onNotificationChange={setPermission}
+              onActiveChange={setOnboardingActive}
+            />
+          </SafeAreaView>
         </ImageViewerScope>
       </PaletteContext.Provider>
     </GestureHandlerRootView>
   );
 }
 export default function App() {
-  return <SafeAreaProvider><ReminderApp /></SafeAreaProvider>;
+  return (
+    <SafeAreaProvider>
+      <ReminderApp />
+    </SafeAreaProvider>
+  );
 }

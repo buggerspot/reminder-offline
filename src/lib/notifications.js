@@ -45,7 +45,7 @@ export async function configureNotifications(soundEnabled = true) {
   ]);
 
   const current = await Notifications.getPermissionsAsync();
-  // Onboarding explains permissions before initiating any system request.
+  // The startup permission flow requests native access after channels exist.
   return current.granted;
 }
 

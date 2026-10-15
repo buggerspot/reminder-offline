@@ -20,7 +20,7 @@ test('onboarding requests only relevant permissions and skips completed or grant
   assert.equal(nextPermissionStep({ ...android, platform: 'web' }), 'done');
 });
 
-test('notification setup configures existing channels and actions without prompting before explanation', async () => {
+test('notification setup creates channels and actions before the startup permission request', async () => {
   let requests = 0;
   let channels = 0;
   let actions = [];
@@ -45,4 +45,33 @@ test('notification setup configures existing channels and actions without prompt
     assert.equal(channels, 1);
     assert.deepEqual(actions.map(a => a.identifier), ['REMINDER_COMPLETE', 'REMINDER_OPEN']);
   } finally { delete globalThis.__permissionNotifications; }
+});
+
+test('native startup flow respects OS versions, prior decisions and exact alarm access', async () => {
+  const { runPermissionOnboarding } = await logic;
+  for (const scenario of [
+    { platform: 'ios', api: 18, requests: 1, opens: 0 },
+    { platform: 'ios', api: 18, canAskAgain: false, requests: 0, opens: 0 },
+    { platform: 'android', api: 33, requests: 1, opens: 1 },
+    { platform: 'android', api: 32, requests: 0, opens: 1 },
+    { platform: 'android', api: 30, requests: 0, opens: 0 },
+    { platform: 'android', api: 36, granted: true, exact: true, requests: 0, opens: 0 },
+    { platform: 'android', api: 36, stage: 'done', requests: 0, opens: 0 },
+    { platform: 'android', api: 36, stage: 'alarms', requests: 0, opens: 1 },
+    { platform: 'android', api: 36, canAskAgain: false, requests: 0, opens: 1 },
+  ]) {
+    let requests = 0, opens = 0, stage = scenario.stage || null;
+    const result = await runPermissionOnboarding({ ...scenario,
+      storage: { async getItem() { return stage; }, async setItem(_key, value) { stage = value; } },
+      notifications: {
+        async getPermissionsAsync() { return { granted: !!scenario.granted, canAskAgain: scenario.canAskAgain !== false }; },
+        async requestPermissionsAsync() { assert.equal(stage, 'alarms'); requests++; return { granted: false }; },
+      },
+      alarms: { async status() { return { exact: !!scenario.exact }; }, async openSettings(kind) { assert.equal(stage, 'done'); assert.equal(kind, 'alarms'); opens++; } },
+    });
+    assert.equal(requests, scenario.requests, JSON.stringify(scenario));
+    assert.equal(opens, scenario.opens, JSON.stringify(scenario));
+    assert.equal(result, !!scenario.granted);
+    assert.equal(stage, 'done');
+  }
 });

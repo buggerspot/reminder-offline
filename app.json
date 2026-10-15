@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Offline Reminder",
-    "slug": "reminder-pro",
+    "name": "Reminder Offline",
+    "slug": "reminder-offline",
     "version": "1.0.0",
     "icon": "./assets/images/icon.png",
     "orientation": "portrait",
@@ -22,7 +22,10 @@
         "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "WAKE_LOCK",
         "SCHEDULE_EXACT_ALARM",
-        "RECEIVE_BOOT_COMPLETED"
+        "RECEIVE_BOOT_COMPLETED",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.INTERNET"
       ],
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
@@ -46,7 +49,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#058B7E",
           "image": "./assets/images/icon.png",
           "imageWidth": 200
         }
@@ -59,8 +62,9 @@
     "extra": {
       "privacy": "offline-first; no account, analytics, or backend configured",
       "eas": {
-        "projectId": "REPLACE_WITH_YOUR_EAS_PROJECT_ID"
+        "projectId": "67ff1295-5277-4b69-b25e-111f895034ab"
       }
-    }
+    },
+    "owner": "buggerspot"
   }
 }
