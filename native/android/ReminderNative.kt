@@ -1,6 +1,10 @@
 package com.buggerspot.reminderoffline
 
 import android.app.*
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.content.*
 import android.media.AudioAttributes
 import android.media.MediaPlayer
@@ -84,7 +88,72 @@ object ReminderEngine {
     if (target != null) r.put("scheduledDate", target.toLocalDate().toString()).put("scheduledAt", target.toInstant().toEpochMilli())
     prefs(c).edit().putString("r:${r.getString("id")}", r.toString()).apply()
   }
+  // Match the Missed tab: one row per series, including ended series.
+  fun missed(r: JSONObject, now: ZonedDateTime): Boolean {
+    if (r.optBoolean("completed")) return false
+    val today = now.toLocalDate()
+    val time = LocalTime.parse(r.getString("time"))
+    if (r.optString("repeat", "none") == "none") return LocalDate.parse(r.getString("date")).atTime(time).atZone(now.zone).toInstant() < now.toInstant()
+    if (occurs(r, today)) return today.atTime(time).atZone(now.zone).toInstant() < now.toInstant()
+    if (next(r, now.toInstant()) != null) return false
+    var day = r.optString("repeatUntil").takeIf { it.isNotEmpty() }?.let { LocalDate.parse(it).coerceAtMost(today) } ?: today
+    val start = LocalDate.parse(r.getString("date"))
+    repeat(2923) {
+      if (day < start) return false
+      if (occurs(r, day) && day.atTime(time).atZone(now.zone).toInstant() <= now.toInstant()) return true
+      day = day.minusDays(1)
+    }
+    return false
+  }
+  private fun dailyPending(c: Context) = PendingIntent.getBroadcast(c, 0,
+    Intent(c, ReminderReceiver::class.java).setAction("REMINDER_MISSED_DAILY"),
+    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+  private fun armDaily(c: Context) {
+    val now = ZonedDateTime.now()
+    var target = now.toLocalDate().atTime(6, 0).atZone(now.zone)
+    if (target <= now) target = target.toLocalDate().plusDays(1).atTime(6, 0).atZone(now.zone)
+    val manager = c.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+    val operation = dailyPending(c)
+    try {
+      if (exact(c)) manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, target.toInstant().toEpochMilli(), operation)
+      else manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, target.toInstant().toEpochMilli(), operation)
+    } catch (_: SecurityException) { manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, target.toInstant().toEpochMilli(), operation) }
+  }
+  fun branded(builder: NotificationCompat.Builder, c: Context): NotificationCompat.Builder {
+    val size = (64 * c.resources.displayMetrics.density).toInt().coerceAtLeast(64)
+    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#2DD4BF") })
+    c.getDrawable(R.drawable.ic_reminder_notification)?.mutate()?.let {
+      it.setTint(Color.WHITE)
+      it.setBounds(size / 4, size / 4, size * 3 / 4, size * 3 / 4)
+      it.draw(canvas)
+    }
+    return builder.setSmallIcon(R.drawable.ic_reminder_notification).setColor(Color.parseColor("#14B8A6")).setLargeIcon(bitmap)
+  }
+  @Synchronized fun dailyMissed(c: Context) {
+    try {
+      val now = ZonedDateTime.now()
+      val today = now.toLocalDate().toString()
+      if (prefs(c).getString("dailyReported", "") == today) return
+      val count = records(c).values.count { missed(it, now) }
+      val manager = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      if (count == 0) { manager.cancel("missed-summary", 0); return }
+      val channel = "offline-reminder-missed-v1"
+      if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(NotificationChannel(channel, "Missed reminders", NotificationManager.IMPORTANCE_DEFAULT).apply { setSound(null, null) })
+      val open = PendingIntent.getActivity(c, 0, c.packageManager.getLaunchIntentForPackage(c.packageName)!!, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+      val body = if (count == 1) "You have 1 missed reminder. Check it or mark it as complete." else "You have $count missed reminders. Check them or mark them as complete."
+      val notification = branded(NotificationCompat.Builder(c, channel), c).setContentTitle("Missed reminders").setContentText(body)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(body)).setSubText("Offline Reminder").setContentIntent(open)
+        .setAutoCancel(true).setCategory(NotificationCompat.CATEGORY_REMINDER).build()
+      try {
+        manager.notify("missed-summary", 0, notification)
+        prefs(c).edit().putString("dailyReported", today).apply()
+      } catch (_: SecurityException) { /* Existing permission banner handles this. */ }
+    } finally { armDaily(c) }
+  }
   private fun arm(c: Context) {
+    armDaily(c)
     val manager = c.getSystemService(Context.ALARM_SERVICE) as AlarmManager
     val operation = pending(c,"next")
     manager.cancel(operation)
@@ -185,7 +254,7 @@ object ReminderEngine {
     val open = PendingIntent.getActivity(c, id.hashCode(), launch, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     val complete = PendingIntent.getBroadcast(c, 0, Intent(c,ReminderReceiver::class.java).setAction("REMINDER_COMPLETE").setData(Uri.parse("offline-reminder://complete/${Uri.encode(id)}/$date")).putExtra("id",id).putExtra("date",date), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     val clear = PendingIntent.getBroadcast(c, 0, Intent(c,ReminderReceiver::class.java).setAction("REMINDER_CLEAR").setData(Uri.parse("offline-reminder://clear/${Uri.encode(id)}")).putExtra("id",id), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-    val notification = NotificationCompat.Builder(c,channel).setOnlyAlertOnce(true).setSound(null).setVibrate(longArrayOf(0,250,150,250)).setSmallIcon(R.drawable.ic_reminder_notification).setContentTitle(r.getString("title")).setContentText(r.optString("description").ifEmpty {"It is time for your reminder."}).setSubText("Offline Reminder").setContentIntent(open).setAutoCancel(false).setCategory(NotificationCompat.CATEGORY_REMINDER).setPriority(NotificationCompat.PRIORITY_HIGH).setDeleteIntent(clear).addAction(0,"Mark complete",complete).addAction(0,"Clear",clear).build()
+    val notification = branded(NotificationCompat.Builder(c,channel), c).setOnlyAlertOnce(true).setSound(null).setVibrate(longArrayOf(0,250,150,250)).setSmallIcon(R.drawable.ic_reminder_notification).setContentTitle(r.getString("title")).setContentText(r.optString("description").ifEmpty {"It is time for your reminder."}).setSubText("Offline Reminder").setContentIntent(open).setAutoCancel(false).setCategory(NotificationCompat.CATEGORY_REMINDER).setPriority(NotificationCompat.PRIORITY_HIGH).setDeleteIntent(clear).addAction(0,"Mark complete",complete).addAction(0,"Clear",clear).build()
     try {manager.notify(ReminderPlaybackService.notificationId(id),notification)} catch (_: SecurityException) { /* permission banner handles this */ }
     // Playback owns audio; the notification channel stays silent to avoid overlap.
     val permitted = Build.VERSION.SDK_INT < 26 || manager.getNotificationChannel(channel)?.let { it.importance >= NotificationManager.IMPORTANCE_DEFAULT } == true
@@ -231,6 +300,7 @@ class ReminderReceiver : BroadcastReceiver() {
     val result=goAsync()
     executor.execute {try {when(intent.action) {
       "REMINDER_FIRE" -> ReminderEngine.fireDue(context)
+      "REMINDER_MISSED_DAILY" -> ReminderEngine.dailyMissed(context)
       "REMINDER_CLEAR" -> ReminderEngine.clear(context,intent.getStringExtra("id") ?: "")
       "REMINDER_COMPLETE" -> ReminderEngine.complete(context,intent.getStringExtra("id") ?: "",intent.getStringExtra("date") ?: "")
       else -> ReminderEngine.restore(context)

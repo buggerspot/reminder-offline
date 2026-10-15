@@ -855,7 +855,7 @@ export default function App() {
         <ExpoStatusBar style={isDark ? "light" : "dark"} />
         {(!permission || alarmStatus?.exact === false) && !bannerDismissed && (
           <PermissionBanner
-            message={!permission ? "Enable notifications to receive your reminders on time." : "Precise timing is disabled. Reminders may arrive late. Allow alarms & reminders for accurate timing."}
+            message={!permission ? "Enable notifications to receive your reminders on time." : "Enable precise alarms for reminders to trigger on time. Without this setting, reminders may be slightly delayed."}
             actionTitle={!permission ? "Enable Notifications" : "Enable precise timing"}
             onDismiss={() => setBannerDismissed(true)}
             onEnable={async () => {
@@ -1114,7 +1114,7 @@ export default function App() {
           )}
 
           {tab === "Calendar" && (
-            <View style={{flex: 1}}><View style={{paddingHorizontal: 20}}><SelectionToolbar active={selectionMode} count={selectedIds.length} total={calendarRows.length} onSelectAll={() => setSelectedIds(selectedIds.length === calendarRows.length ? [] : calendarRows.map(r => r.id))} onCancel={() => {setSelectionMode(false);setSelectedIds([]);}} onDelete={() => deleteMany(calendarRows.filter(r => selectedSet.has(r.id)).map(r => r.id))} /></View>
+            <View style={{flex: 1}}>{selectionMode && <View style={{paddingHorizontal: 20}}><SelectionToolbar active={selectionMode} count={selectedIds.length} total={calendarRows.length} onSelectAll={() => setSelectedIds(selectedIds.length === calendarRows.length ? [] : calendarRows.map(r => r.id))} onCancel={() => {setSelectionMode(false);setSelectedIds([]);}} onDelete={() => deleteMany(calendarRows.filter(r => selectedSet.has(r.id)).map(r => r.id))} /></View>}
             <FlatList
               data={calendarRows}
               keyExtractor={(item) => item.id}

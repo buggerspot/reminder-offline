@@ -15,6 +15,15 @@ class ReminderInstrumentation : Instrumentation() {
     try {
       val base=JSONObject().put("id","native-validation").put("title","Offline Reminder timing validation").put("date",LocalDate.now().toString()).put("time","09:00").put("repeat","daily").put("completed",false)
       check(ReminderEngine.next(JSONObject(base.toString()).put("date","2026-01-31").put("repeat","monthly").put("monthDay",31), ZonedDateTime.of(2026,2,1,12,0,0,0,ZoneId.systemDefault()).toInstant())?.toLocalDate().toString()=="2026-03-31")
+      val morning = ZonedDateTime.of(2026, 10, 15, 6, 0, 0, 0, ZoneId.systemDefault())
+      fun sample() = JSONObject(base.toString()).put("date", "2026-10-14").put("repeat", "none").put("time", "09:00")
+      check(ReminderEngine.missed(sample(), morning)) { "Overdue one-time reminder must count" }
+      check(!ReminderEngine.missed(sample().put("completed", true), morning))
+      check(!ReminderEngine.missed(sample().put("date", "2026-10-15"), morning))
+      check(ReminderEngine.missed(sample().put("repeat", "daily").put("time", "05:00"), morning))
+      check(!ReminderEngine.missed(sample().put("repeat", "daily"), morning)) { "Future occurrence must not count yesterday's miss" }
+      check(!ReminderEngine.missed(sample().put("repeat", "daily").put("time", "05:00").put("completedDates", org.json.JSONArray("[\"2026-10-15\"]")), morning))
+      check(ReminderEngine.missed(sample().put("repeat", "daily").put("repeatUntil", "2026-10-14"), morning)) { "Ended series must count its uncompleted occurrence" }
       val original=TimeZone.getDefault()
       try {
         TimeZone.setDefault(TimeZone.getTimeZone("America/New_York"))
