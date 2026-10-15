@@ -1,13 +1,19 @@
-import React, { useContext, useMemo, useSyncExternalStore } from "react";
+import React, { useContext, useMemo, useSyncExternalStore, useState, useDeferredValue } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { Bell, CalendarDays, Plus, Search, Settings as SettingsIcon, X } from "lucide-react-native";
 import { Btn, Card, PaletteContext, ReminderRow, SelectionArea, SelectionToolbar } from "./components";
+import { indexReminderCategories, searchReminderCategory } from "./lib/search";
 import { PremiumFlatList as FlatList } from "./interaction-components";
 
-export const HomeReminders = React.memo(function HomeReminders({ categories, C, categoryRows, completeSelected, deleteMany, homeRows, openNew, openReminder, reminders, search, searchedCategories, selectedIds, selectedSet, selectionMode, setSearch, setSelectedIds, setTab, tabBarHeight, toggleSelection }) {
+export const HomeReminders = React.memo(function HomeReminders({ categories, C, categoryRows, completeSelected, deleteMany, openNew, openReminder, reminders, onSearchChange, selectedIds, selectedSet, selectionMode, setSelectedIds, setTab, tabBarHeight, toggleSelection }) {
   const filter = useSyncExternalStore(categories.subscribe, categories.getSnapshot, categories.getSnapshot);
   const palette = useContext(PaletteContext);
-  const visible = searchedCategories[filter];
+  const [search, setSearchText] = useState("");
+  const query = useDeferredValue(search);
+  const index = useMemo(() => indexReminderCategories(categoryRows), [categoryRows]);
+  const visible = useMemo(() => searchReminderCategory(index, filter, query), [index, filter, query]);
+  const rows = useMemo(() => [{ id: "header", header: true }, { id: "controls", controls: true }, ...visible], [visible]);
+  const setSearch = text => { setSearchText(text); onSearchChange(); };
   const setFilter = name => categories.select(name);
   const header = useMemo(() => (
 
@@ -166,7 +172,7 @@ export const HomeReminders = React.memo(function HomeReminders({ categories, C, 
   return (
             <FlatList
               boundaryInset={tabBarHeight}
-              data={homeRows[filter]}
+              data={rows}
               stickyHeaderIndices={[1]}
               keyExtractor={(item) =>
                 item.header

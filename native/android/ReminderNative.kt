@@ -331,9 +331,59 @@ class ReminderReceiver : BroadcastReceiver() {
   companion object {private val executor=Executors.newSingleThreadExecutor()}
 }
 
-class ReminderNativeModule(private val context: ReactApplicationContext) : ReactContextBaseJavaModule(context) {
+class ReminderNativeModule(private val context: ReactApplicationContext) : ReactContextBaseJavaModule(context), LifecycleEventListener {
   private val executor=Executors.newSingleThreadExecutor()
+  private val previewThread = android.os.HandlerThread("ReminderPreview").apply { start() }
+  private val previewHandler = android.os.Handler(previewThread.looper)
   private var player: MediaPlayer?=null
+  private var previewSession: String?=null
+  private var previewPrepared=false
+  private var previewPaused=false
+  init { context.addLifecycleEventListener(this) }
+  private fun emitPreview(state:String,session:String,message:String?=null) {
+    if (!context.hasActiveReactInstance()) return
+    val event=Arguments.createMap().apply {putString("session",session);putString("state",state);if(message!=null)putString("message",message)}
+    context.getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java).emit("ReminderPreviewState",event)
+  }
+  private fun releasePreview(state:String="stopped",message:String?=null) {
+    val session=previewSession
+    val previous=player
+    player=null;previewSession=null;previewPrepared=false;previewPaused=false
+    previous?.setOnCompletionListener(null);previous?.setOnErrorListener(null);previous?.setOnPreparedListener(null)
+    previous?.release()
+    if(session!=null)emitPreview(state,session,message)
+  }
+  private fun startSoundPreview(source:String,builtIn:Boolean,session:String,promise:Promise) {
+    previewHandler.post {try {
+      releasePreview()
+      previewSession=session
+      val candidate=MediaPlayer()
+      player=candidate
+      candidate.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+      candidate.isLooping=false
+      if(builtIn) {
+        require(source in listOf("reminder","gentle","bright"))
+        val resource=context.resources.getIdentifier(source,"raw",context.packageName)
+        context.resources.openRawResourceFd(resource).use { candidate.setDataSource(it.fileDescriptor,it.startOffset,it.length) }
+      } else {
+        val file=File(Uri.parse(source).path ?: "")
+        require(file.exists() && file.canonicalPath.startsWith(context.filesDir.canonicalPath+File.separator)) {"Audio file is missing or inaccessible."}
+        candidate.setDataSource(context,Uri.parse(source))
+      }
+      candidate.setOnCompletionListener { if(player===it && previewSession==session) releasePreview("ended") }
+      candidate.setOnErrorListener { current,_,_ -> if(player===current && previewSession==session)releasePreview("error","Cannot play this audio file.");true }
+      candidate.setOnPreparedListener { if(player===it && previewSession==session) {try {
+        previewPrepared=true
+        if(previewPaused)emitPreview("paused",session)
+        else {it.start();emitPreview("playing",session)}
+      } catch(e:Exception) {releasePreview("error",e.message)} } }
+      emitPreview("loading",session)
+      candidate.prepareAsync()
+      promise.resolve(true)
+    } catch(e:Exception) {releasePreview("error",e.message);promise.reject("PREVIEW_ERROR",e.message,e)} }
+  }
+  @ReactMethod fun addListener(eventName:String) {}
+  @ReactMethod fun removeListeners(count:Double) {}
   override fun getName()="ReminderNative"
   private fun task(promise: Promise,block: () -> Any?) {executor.execute {try {promise.resolve(block())} catch(e:Exception) {promise.reject("REMINDER_ERROR",e.message,e)}}}
   @ReactMethod fun clearNotification(id:String,promise:Promise)=task(promise) {ReminderEngine.clear(context,id);true}
@@ -371,16 +421,25 @@ class ReminderNativeModule(private val context: ReactApplicationContext) : React
     require(file.exists() && file.canonicalPath.startsWith(context.filesDir.canonicalPath + File.separator)) {"Audio file is missing or inaccessible."}
     return MediaPlayer().apply {try {setDataSource(context,Uri.parse(uri));setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build());prepare()} catch(e:Exception) {release();throw e}}
   }
-  @ReactMethod fun previewBuiltIn(name:String,promise:Promise)=task(promise) {
-    require(name in listOf("reminder","gentle","bright"))
-    player?.release()
-    player=MediaPlayer.create(context,context.resources.getIdentifier(name,"raw",context.packageName)).apply {setOnCompletionListener {it.release();player=null};start()};true
-  }
+  @ReactMethod fun startPreviewBuiltIn(name:String,session:String,promise:Promise) {startSoundPreview(name,true,session,promise)}
+  @ReactMethod fun startPreview(uri:String,session:String,promise:Promise) {startSoundPreview(uri,false,session,promise)}
+  @ReactMethod fun previewBuiltIn(name:String,promise:Promise) {startSoundPreview(name,true,"legacy",promise)}
+  @ReactMethod fun preview(uri:String,promise:Promise) {startSoundPreview(uri,false,"legacy",promise)}
   @ReactMethod fun validateAudio(uri:String,promise:Promise)=task(promise) {audio(uri).release();true}
-  @ReactMethod fun preview(uri:String,promise:Promise)=task(promise) {player?.release();player=audio(uri).apply {setOnCompletionListener {it.release();player=null};start()};true}
-  @ReactMethod fun stopPreview() {executor.execute {player?.release();player=null}}
+  @ReactMethod fun pausePreview(session:String,promise:Promise) {previewHandler.post {try {
+    if(previewSession==session && player!=null) {previewPaused=true;if(previewPrepared)player?.pause();emitPreview("paused",session)}
+    promise.resolve(true)
+  } catch(e:Exception) {releasePreview("error",e.message);promise.reject("PREVIEW_ERROR",e.message,e)}}}
+  @ReactMethod fun resumePreview(session:String,promise:Promise) {previewHandler.post {try {
+    if(previewSession==session && player!=null) {previewPaused=false;if(previewPrepared) {player?.start();emitPreview("playing",session)} else emitPreview("loading",session)}
+    promise.resolve(true)
+  } catch(e:Exception) {releasePreview("error",e.message);promise.reject("PREVIEW_ERROR",e.message,e)}}}
+  @ReactMethod fun stopPreview() {previewHandler.post {releasePreview()}}
+  override fun onHostResume() {}
+  override fun onHostPause() {previewHandler.post {releasePreview()}}
+  override fun onHostDestroy() {previewHandler.post {releasePreview()}}
   @ReactMethod fun removeSoundChannel(id:String,promise:Promise)=task(promise) {if(Build.VERSION.SDK_INT >= 26) (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).deleteNotificationChannel("offline-reminder-$id-v2");true}
-  override fun invalidate() {executor.execute {player?.release();player=null};executor.shutdown();super.invalidate()}
+  override fun invalidate() {context.removeLifecycleEventListener(this);previewHandler.post {releasePreview();previewThread.quitSafely()};executor.shutdown();super.invalidate()}
 }
 class ReminderNativePackage : BaseReactPackage() {
   override fun getModule(name:String,reactContext:ReactApplicationContext):NativeModule? = if(name == "ReminderNative") ReminderNativeModule(reactContext) else null

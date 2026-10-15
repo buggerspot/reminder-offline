@@ -561,7 +561,7 @@ export function AppDialog({ dialog, onClose }) {
     <Modal
       visible={!!dialog}
       transparent
-      animationType="fade"
+      animationType="none"
       onRequestClose={onClose}
     >
       <View

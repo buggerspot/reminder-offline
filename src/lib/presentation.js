@@ -42,6 +42,25 @@ export function createCategorySelection(names) {
   };
 }
 
+export function createEditorPresentation() {
+  const state = observable(null);
+  return { ...state, open(form, editing = null) { state.publish({ form, editing }); }, close() { state.publish(null); } };
+}
+
+export function createDialogQueue() {
+  const state = observable(null);
+  const queue = [];
+  return {
+    ...state,
+    alert(title, message, buttons) {
+      const next = { title, message, buttons };
+      if (state.getSnapshot()) queue.push(next);
+      else state.publish(next);
+    },
+    close() { state.publish(queue.shift() || null); },
+  };
+}
+
 // Only visible content and text-layout constraints invalidate sheet sizing.
 export function reminderLayoutKey(item, width, fontScale, bottomInset = 0) {
   if (!item) return null;

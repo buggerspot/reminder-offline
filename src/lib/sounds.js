@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import { NativeModules } from "react-native";
+import { soundPreview } from "./sound-preview-native";
 const KEY = "@offline-reminder/sounds-v1";
 export const BUILT_IN_SOUNDS = [
   { id: null, name: "Reminder", builtIn: true },
@@ -59,20 +60,5 @@ export async function removeSound(sound) {
     JSON.stringify((await loadSounds()).filter((s) => s.id !== sound.id)),
   );
 }
-export async function previewSound(sound) {
-  if (sound.builtIn) {
-    if (!NativeModules.ReminderNative)
-      throw new Error("Preview requires the Android build.");
-    return NativeModules.ReminderNative.previewBuiltIn(sound.id || "reminder");
-  }
-  if (!(await FileSystem.getInfoAsync(sound.uri)).exists)
-    throw new Error(
-      "The imported file is missing. Remove it and import it again.",
-    );
-  if (!NativeModules.ReminderNative)
-    throw new Error("Preview requires the Offline Reminder Android build.");
-  await NativeModules.ReminderNative.preview(sound.uri);
-}
-export function stopPreview() {
-  NativeModules.ReminderNative?.stopPreview();
-}
+export async function previewSound(sound) { return soundPreview.toggle(sound); }
+export function stopPreview() { soundPreview.stop(); }
