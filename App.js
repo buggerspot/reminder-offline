@@ -107,10 +107,13 @@ import {
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import {
   TabPager, PremiumFlatList as FlatList, PremiumScrollView as ScrollView,
-  ImageViewerScope, ZoomableImage, ReminderSheet,
+  ImageViewerScope, ZoomableImage,
 } from "./src/interaction-components";
 import { PermissionOnboarding } from "./src/permission-onboarding";
-import { CATEGORY_NAMES } from "./src/lib/interactions";
+import { CATEGORY_NAMES, TAB_NAMES } from "./src/lib/interactions";
+import { createReminderPresentation, createTabNavigation } from "./src/lib/presentation";
+import { ReminderDetails } from "./src/reminder-details";
+import { MainTabBar } from "./src/main-tab-bar";
 const C = {
   brand: "#0F766E",
   brand2: "#14B8A6",
@@ -150,12 +153,15 @@ function ReminderApp() {
   const [loadError, setLoadError] = useState(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const dataReady = useRef(false);
-  const [tab, setTab] = useState("Home");
+  const [navigation] = useState(() => createTabNavigation(TAB_NAMES));
+  const setTab = useCallback(name => navigation.navigate(name), [navigation]);
+  const onTabBarLayout = useCallback(e => setTabBarHeight(e.nativeEvent.layout.height), []);
   const [tabBarHeight, setTabBarHeight] = useState(60);
   const [filter, setFilter] = useState("Upcoming");
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState(null);
-  const [detail, setDetail] = useState(null);
+  const [details] = useState(createReminderPresentation);
+  const setDetail = useCallback(value => details.set(value), [details]);
   const sheetRef = useRef(null);
   const formViewerRef = useRef(null);
   const pendingEditor = useRef(false);
@@ -168,12 +174,6 @@ function ReminderApp() {
     setDetail(null);
     if (Platform.OS !== "ios") requestAnimationFrame(showPendingEditor);
   }, [showPendingEditor]);
-  const [sheetExpanded, setSheetExpanded] = useState(false);
-  const [detailImageFailed, setDetailImageFailed] = useState(false);
-  useEffect(() => {
-    setSheetExpanded(false);
-    setDetailImageFailed(false);
-  }, [detail?.id, detail?.imageUri]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     title: "",
@@ -236,10 +236,11 @@ function ReminderApp() {
     setDialog(next);
   };
   const selectionMode = selectedIds.length > 0;
+  useEffect(() => navigation.subscribe(() => setSelectedIds(ids => ids.length ? [] : ids)), [navigation]);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   useEffect(() => {
     setSelectedIds([]);
-  }, [tab, filter, selectedDate, search]);
+  }, [filter, selectedDate, search]);
   const isDark = settings.theme === "dark";
   const palette = useMemo(
     () =>
@@ -454,6 +455,7 @@ function ReminderApp() {
       await NativeModules.ReminderNative?.clearNotification?.(id);
       let updated;
       if (current.repeat && current.repeat !== "none") {
+        const detail = details.getSnapshot();
         const occurrenceDate = detail?.id === id ? detail.date : todayISO();
         updated = reminders.map((r) =>
           r.id === id
@@ -493,7 +495,7 @@ function ReminderApp() {
       setReminders(updated);
       sheetRef.current?.close();
     },
-    [reminders, settings.soundEnabled, detail],
+    [reminders, settings.soundEnabled, details],
   );
   useEffect(() => {
     const handle = (response) => {
@@ -584,7 +586,7 @@ function ReminderApp() {
       repeat: r.repeat || "none",
       repeatUntil: r.repeatUntil || "",
     });
-    if (detail && sheetRef.current) {
+    if (details.getSnapshot() && sheetRef.current) {
       pendingEditor.current = true;
       sheetRef.current.close();
     } else setShowForm(true);
@@ -735,7 +737,7 @@ function ReminderApp() {
               const next = deleteSelected(
                 reminderRef.current,
                 deletedIds,
-                tab === "Home" ? filter : "Calendar",
+                navigation.getSnapshot() === "Home" ? filter : "Calendar",
               );
               for (const r of reminders.filter((r) => deletedIds.has(r.id))) {
                 await NativeModules.ReminderNative?.clearNotification?.(r.id);
@@ -799,14 +801,14 @@ function ReminderApp() {
   );
   useEffect(() => {
     const available = new Set(
-      (tab === "Calendar" ? calendarRows : visible).map((r) => r.id),
+      (navigation.getSnapshot() === "Calendar" ? calendarRows : visible).map((r) => r.id),
     );
     setSelectedIds((ids) =>
       ids.every((id) => available.has(id))
         ? ids
         : ids.filter((id) => available.has(id)),
     );
-  }, [tab, calendarRows, visible]);
+  }, [navigation, calendarRows, visible]);
   const calendarDays = useMemo(() => {
     const year = calendarMonth.getFullYear(),
       month = calendarMonth.getMonth();
@@ -837,7 +839,7 @@ function ReminderApp() {
     setCalendarMonth(
       (d) => new Date(d.getFullYear(), d.getMonth() + amount, 1),
     );
-  const openReminder = useCallback((item) => { setSheetExpanded(false); setDetail(item); }, []);
+  const openReminder = useCallback(item => { details.open(item); }, [details]);
   const onImport = async () => {
     try {
       const imported = await importReminders();
@@ -1381,7 +1383,7 @@ function ReminderApp() {
             flex: 1,
           }}
         >
-          <TabPager tab={tab} onChange={setTab}>
+          <TabPager navigation={navigation}>
           <View style={{ flex: 1 }}>
             <FlatList
               boundaryInset={tabBarHeight}
@@ -2246,65 +2248,7 @@ function ReminderApp() {
           </View>
           </TabPager>
 
-          <View
-            onLayout={e => setTabBarHeight(e.nativeEvent.layout.height)}
-            style={{
-              position: "absolute",
-              bottom: 0,
-              left: 0,
-              right: 0,
-              backgroundColor: palette.card,
-              borderTopWidth: 1,
-              borderTopColor: palette.border,
-              paddingTop: 10,
-              paddingBottom: Platform.OS === "ios" ? 12 : 10,
-              flexDirection: "row",
-              justifyContent: "space-around",
-            }}
-          >
-            {[
-              {
-                name: "Home",
-                icon: Home,
-              },
-              {
-                name: "Calendar",
-                icon: CalendarDays,
-              },
-              {
-                name: "Settings",
-                icon: SettingsIcon,
-              },
-            ].map((x) => {
-              const I = x.icon;
-              const active = tab === x.name;
-              return (
-                <Pressable
-                  key={x.name}
-                  accessibilityRole="tab"
-                  accessibilityState={{ selected: active }}
-                  onPress={() => setTab(x.name)}
-                  style={({ pressed }) => ({
-                    opacity: pressed ? 0.65 : 1,
-                    alignItems: "center",
-                    gap: 4,
-                    minWidth: 70,
-                  })}
-                >
-                  <I size={21} color={active ? palette.brand : palette.muted} />
-                  <Text
-                    style={{
-                      color: active ? palette.brand : palette.muted,
-                      fontSize: 11,
-                      fontWeight: active ? "800" : "600",
-                    }}
-                  >
-                    {x.name}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          <MainTabBar navigation={navigation} onLayout={onTabBarLayout} />
         </View>
 
         <Modal visible={showForm} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => { if (!formViewerRef.current?.closeIfOpen()) closeEditor(); }}>
@@ -2630,171 +2574,7 @@ function ReminderApp() {
             </ScrollView>
           </SafeAreaView>
         </Modal>
-        <ReminderSheet ref={sheetRef} item={detail} expanded={sheetExpanded} onClose={closeDetails} onDismiss={showPendingEditor} onExpand={() => setSheetExpanded(true)} onCollapse={() => setSheetExpanded(false)}>
-            <View
-              style={{
-                backgroundColor: palette.bg,
-                borderTopLeftRadius: 28,
-                borderTopRightRadius: 28,
-                padding: 22,
-                paddingBottom: 34,
-              }}
-            >
-              <View
-                style={{
-                  flexDirection: "row",
-                  justifyContent: "space-between",
-                  alignItems: "flex-start",
-                }}
-              >
-                <View
-                  style={{
-                    flex: 1,
-                    marginRight: 12,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: palette.muted,
-                      fontSize: 12,
-                      fontWeight: "700",
-                    }}
-                  >
-                    REMINDER DETAILS
-                  </Text>
-                  <Text
-                    style={{
-                      color: palette.text,
-                      fontSize: 24,
-                      fontWeight: "800",
-                      marginTop: 7,
-                    }}
-                  >
-                    {detail?.title}
-                  </Text>
-                </View>
-                {detail?.imageUri && !detailImageFailed && <ZoomableImage uri={detail.imageUri} onError={() => setDetailImageFailed(true)} style={{ width: 46, height: 46, borderRadius: 15, marginRight: 12 }} />}
-                <Pressable onPress={() => sheetRef.current?.close()}>
-                  <X color={palette.text} />
-                </Pressable>
-              </View>
-              <View
-                style={{
-                  flexDirection: "row",
-                  gap: 10,
-                  marginTop: 20,
-                  marginBottom: 16,
-                }}
-              >
-                <View
-                  style={{
-                    flex: 1,
-                    backgroundColor: palette.card,
-                    borderRadius: 15,
-                    padding: 13,
-                  }}
-                >
-                  <CalendarDays color={palette.brand} size={20} />
-                  <Text
-                    style={{
-                      color: palette.text,
-                      fontWeight: "700",
-                      marginTop: 8,
-                    }}
-                  >
-                    {detail ? formatDate(detail.date) : ""}
-                  </Text>
-                </View>
-                <View
-                  style={{
-                    flex: 1,
-                    backgroundColor: palette.card,
-                    borderRadius: 15,
-                    padding: 13,
-                  }}
-                >
-                  <Clock3 color={palette.brand} size={20} />
-                  <Text
-                    style={{
-                      color: palette.text,
-                      fontWeight: "700",
-                      marginTop: 8,
-                    }}
-                  >
-                    {detail ? formatTime(detail.time) : ""}
-                  </Text>
-                </View>
-              </View>
-              {detail?.description ? (
-                <Text
-                  style={{
-                    color: palette.muted,
-                    lineHeight: 21,
-                    marginBottom: 18,
-                  }}
-                >
-                  {detail.description}
-                </Text>
-              ) : null}
-              {detail?.repeat && detail.repeat !== "none" ? (
-                <Text
-                  style={{
-                    color: palette.muted,
-                    marginBottom: 16,
-                  }}
-                >
-                  Repeats {detail.repeat}
-                  {detail.repeatUntil ? ` until ${detail.repeatUntil}` : ""}
-                </Text>
-              ) : null}
-              {detail?.imageUri && !detailImageFailed && <View style={{ marginBottom: 18, alignItems: "flex-start" }}>
-                <ZoomableImage uri={detail.imageUri} onError={() => setDetailImageFailed(true)} style={{ width: 180, height: 180, borderRadius: 15 }} />
-              </View>}
-              {!detail?.completed && (
-                <View
-                  style={{
-                    marginBottom: 10,
-                  }}
-                >
-                  <Btn
-                    title="Mark as complete"
-                    onPress={() => markComplete(detail.id)}
-                    icon={<CheckCircle2 color="white" size={18} />}
-                  />
-                </View>
-              )}
-              <View
-                style={{
-                  flexDirection: "row",
-                  gap: 10,
-                }}
-              >
-                <View
-                  style={{
-                    flex: 1,
-                  }}
-                >
-                  <Btn
-                    title="Edit"
-                    secondary
-                    onPress={() => openEdit(detail)}
-                  />
-                </View>
-                <View
-                  style={{
-                    flex: 1,
-                  }}
-                >
-                  <Btn
-                    title="Delete"
-                    danger
-                    onPress={() => deleteReminder(detail)}
-                    icon={<Trash2 color="#B91C1C" size={17} />}
-                  />
-                </View>
-              </View>
-            </View>
-        </ReminderSheet>
+        <ReminderDetails presentation={details} sheetRef={sheetRef} onClose={closeDetails} onDismiss={showPendingEditor} markComplete={markComplete} openEdit={openEdit} deleteReminder={deleteReminder} />
         <AppDialog dialog={dialog} onClose={closeDialog} />
         <PermissionOnboarding onNotificationChange={setPermission} onActiveChange={setOnboardingActive} />
     </SafeAreaView>
