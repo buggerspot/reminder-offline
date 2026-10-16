@@ -12,7 +12,6 @@ import {
   Linking,
   NativeModules,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   Text,
@@ -95,7 +94,6 @@ import {
   SelectedDateText,
   PaletteContext,
   Card,
-  Btn,
   Label,
   Field,
   Chip,
@@ -107,7 +105,6 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import {
   TabPager,
   PremiumFlatList as FlatList,
-  PremiumScrollView as ScrollView,
   ImageViewerScope,
   ZoomableImage,
 } from "./src/interaction-components";
@@ -205,7 +202,6 @@ function ReminderApp() {
   soundRef.current = sounds;
   const [showSounds, setShowSounds] = useState(false);
   const closeSounds = useCallback(() => setShowSounds(false), []);
-  const [showPrivacy, setShowPrivacy] = useState(false);
   const handledResponse = useRef(null);
   const reminderRef = useRef(reminders);
   reminderRef.current = reminders;
@@ -1021,7 +1017,6 @@ function ReminderApp() {
                     alarmStatus={alarmStatus}
                     exportWith={actions.exportWith}
                     onImport={actions.onImport}
-                    setShowPrivacy={setShowPrivacy}
                     setShowSounds={setShowSounds}
                     settings={settings}
                     sounds={sounds}
@@ -1052,66 +1047,6 @@ function ReminderApp() {
               Alert={Alert}
               C={C}
             />
-            <Modal
-              visible={showPrivacy}
-              animationType="slide"
-              onRequestClose={() => setShowPrivacy(false)}
-            >
-              {showPrivacy ? (
-                <SafeAreaView
-                  style={{
-                    flex: 1,
-                    backgroundColor: palette.bg,
-                  }}
-                >
-                  <ScrollView
-                    contentContainerStyle={{
-                      padding: 20,
-                    }}
-                  >
-                    <Btn
-                      secondary
-                      title="Close"
-                      onPress={() => setShowPrivacy(false)}
-                    />
-                    <Text
-                      style={{
-                        color: palette.text,
-                        fontSize: 26,
-                        fontWeight: "800",
-                        marginVertical: 20,
-                      }}
-                    >
-                      Privacy Policy
-                    </Text>
-                    <Text
-                      style={{
-                        color: palette.text,
-                        lineHeight: 24,
-                      }}
-                    >
-                      Offline Reminder stores your reminders, preferences,
-                      reminder images and imported audio files locally on your
-                      device. The app does not require an account and does not
-                      send this data to a backend, analytics or advertising
-                      service. Notifications are scheduled through your
-                      operating system. Audio files are accessed only when you
-                      choose them using the system file picker, and a private
-                      copy is saved in app storage. Exporting a backup shares
-                      the reminder data with the destination you select; images
-                      and imported audio are not included. Android device backup
-                      may include app data according to your system backup
-                      settings. You can delete reminders and imported sounds in
-                      the app, or clear all app data in system settings.
-                      Uninstalling the app removes its local private data. Keep
-                      your backups safe: they can contain personal information.
-                      This policy applies to version 1.0.0. Updated October 13,
-                      2026.
-                    </Text>
-                  </ScrollView>
-                </SafeAreaView>
-              ) : null}
-            </Modal>
             <ReminderDetails
               presentation={details}
               sheetRef={sheetRef}

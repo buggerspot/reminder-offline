@@ -1,10 +1,10 @@
 import React from "react";
-import { NativeModules, Pressable, Text, View } from "react-native";
+import { Linking, NativeModules, Platform, Pressable, Text, View } from "react-native";
 import { ChevronRight, Download, FileUp, Heart, Sun, Volume2 } from "lucide-react-native";
 import { Btn, Card, PaletteContext, SettingsToggle } from "./components";
 import { PremiumScrollView as ScrollView } from "./interaction-components";
 import { BUILT_IN_SOUNDS } from "./lib/sounds";
-export const SettingsPage = React.memo(function SettingsPage({ Alert, alarmStatus, exportWith, onImport, setShowPrivacy, setShowSounds, settings, sounds, tabBarHeight, updateSettings }) {
+export const SettingsPage = React.memo(function SettingsPage({ Alert, alarmStatus, exportWith, onImport, setShowSounds, settings, sounds, tabBarHeight, updateSettings }) {
   const palette = React.useContext(PaletteContext);
   const isDark = settings.theme === "dark";
   return (
@@ -245,7 +245,9 @@ export const SettingsPage = React.memo(function SettingsPage({ Alert, alarmStatu
                 </Text>
                 <Pressable
                   accessibilityRole="link"
-                  onPress={() => setShowPrivacy(true)}
+                  {...(Platform.OS === "web"
+                    ? { href: "https://www.buggerspot.com/apps/reminder-offline/privacy-policy" }
+                    : { onPress: () => Linking.openURL("https://www.buggerspot.com/apps/reminder-offline/privacy-policy") })}
                   style={{
                     paddingVertical: 12,
                   }}
