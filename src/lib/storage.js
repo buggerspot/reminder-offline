@@ -13,6 +13,7 @@ let settingsWriteQueue = Promise.resolve();
 export const DEFAULT_SETTINGS = {
   theme: "light",
   soundEnabled: true,
+  defaultSoundId: "happy_bells",
   keepReminderAfterDismiss: true,
   confirmBeforeClear: false,
   haptics: true,

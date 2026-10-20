@@ -221,6 +221,7 @@ export const Field = ({
   placeholder,
   multiline = false,
   keyboardType = "default",
+  inputProps = {},
 }) => {
   const palette = useContext(PaletteContext);
   return (
@@ -235,6 +236,7 @@ export const Field = ({
         submitBehavior={multiline ? "blurAndSubmit" : undefined}
         onSubmitEditing={multiline ? () => Keyboard.dismiss() : undefined}
         keyboardType={keyboardType}
+        {...inputProps}
         style={{
           color: palette.text,
           backgroundColor: palette.bg,

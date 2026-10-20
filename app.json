@@ -42,7 +42,11 @@
           "sounds": [
             "./assets/sounds/reminder.wav",
             "./assets/sounds/gentle.wav",
-            "./assets/sounds/bright.wav"
+            "./assets/sounds/bright.wav",
+            "./assets/sounds/arabian_mystery.wav",
+            "./assets/sounds/bell_notification.wav",
+            "./assets/sounds/happy_bells.wav",
+            "./assets/sounds/musical_alert.wav"
           ]
         }
       ],

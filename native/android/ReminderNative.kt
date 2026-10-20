@@ -222,7 +222,7 @@ object ReminderEngine {
         return uri
       }
     }
-    val name = when(r.optString("soundId")) { "gentle" -> "gentle"; "bright" -> "bright"; else -> "reminder" }
+    val name = when(val id = r.optString("soundId")) { "gentle", "bright", "arabian_mystery", "bell_notification", "happy_bells", "musical_alert" -> id; else -> "reminder" }
     return Uri.parse("android.resource://${c.packageName}/raw/$name")
   }
   @Synchronized fun fireDue(c: Context) {
@@ -362,7 +362,7 @@ class ReminderNativeModule(private val context: ReactApplicationContext) : React
       candidate.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
       candidate.isLooping=false
       if(builtIn) {
-        require(source in listOf("reminder","gentle","bright"))
+        require(source in listOf("reminder","gentle","bright","arabian_mystery","bell_notification","happy_bells","musical_alert"))
         val resource=context.resources.getIdentifier(source,"raw",context.packageName)
         context.resources.openRawResourceFd(resource).use { candidate.setDataSource(it.fileDescriptor,it.startOffset,it.length) }
       } else {

@@ -70,7 +70,10 @@ export async function scheduleReminder(reminder, soundEnabled = true) {
       ...(attachments.length ? { attachments } : {}),
       data: { reminderId: reminder.id },
       categoryIdentifier: REMINDER_CATEGORY,
-      sound: soundEnabled ? "reminder.wav" : false,
+      sound: soundEnabled
+        ? (["arabian_mystery", "bell_notification", "happy_bells", "musical_alert"].includes(reminder.soundId)
+          ? `${reminder.soundId}.wav` : "reminder.wav")
+        : false,
       ...(Platform.OS === "android" ? { channelId: "reminders" } : {}),
     },
     trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date },

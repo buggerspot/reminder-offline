@@ -8,6 +8,10 @@ export const BUILT_IN_SOUNDS = [
   { id: null, name: "Reminder", builtIn: true },
   { id: "gentle", name: "Gentle chime", builtIn: true },
   { id: "bright", name: "Bright bell", builtIn: true },
+  { id: "arabian_mystery", name: "Arabian Mystery", builtIn: true },
+  { id: "bell_notification", name: "Bell Notification", builtIn: true },
+  { id: "happy_bells", name: "Happy Bells", builtIn: true },
+  { id: "musical_alert", name: "Musical Alert", builtIn: true },
 ];
 export async function loadSounds() {
   const raw = await AsyncStorage.getItem(KEY);
