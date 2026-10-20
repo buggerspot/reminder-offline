@@ -5,9 +5,9 @@ const vm = require("node:vm");
 const { transformSync } = require("@babel/core");
 
 // Exercise the editor's event handlers and layout with a small hook host;
-// native keyboard presentation still requires a device smoke test.
+// native picker presentation still requires a device smoke test.
 const source = fs.readFileSync(require.resolve("../src/reminder-editor.jsx"), "utf8");
-const code = transformSync(source.slice(source.indexOf("function ManualDateTimeField"), source.indexOf("export const ReminderEditor")), {
+const code = transformSync(source.slice(source.indexOf("function VisualPickerField"), source.indexOf("export const ReminderEditor")), {
   configFile: false, babelrc: false,
   plugins: ["@babel/plugin-transform-react-jsx"],
 }).code;
@@ -32,14 +32,16 @@ function host() {
       dismiss: () => { keyboardVisible = false; },
       addListener: (event, callback) => { listeners.set(event, callback); return { remove: () => listeners.delete(event) }; },
     },
+    validDate: value => /^\d{4}-\d{2}-\d{2}$/.test(value),
+    REPEAT_OPTIONS: [{ value: "daily", label: "Daily" }],
     Platform: { OS: "android" }, NativeModules: {},
   };
-  for (const name of ["Pressable", "View", "Field", "Modal", "KeyboardAvoidingView", "SafeAreaView", "ScrollView", "Label", "Btn", "Text", "X", "Check", "Chip", "ZoomableImage", "Trash2"]) scope[name] = name;
+  for (const name of ["CalendarDays", "ChevronRight", "Clock", "Repeat", "ReminderValuePicker", "Pressable", "View", "Field", "Modal", "KeyboardAvoidingView", "SafeAreaView", "ScrollView", "Label", "Btn", "Text", "X", "Check", "Chip", "ZoomableImage", "Trash2"]) scope[name] = name;
   vm.createContext(scope);
   vm.runInContext(code, scope);
   return {
     scope, timers,
-    render(name, props) { cursor = 0; refCursor = 0; effects.length = 0; return scope[name](props); },
+    render(name, props) { cursor = 0; refCursor = 0; effects.length = 0; return scope[name]({ todayISO: () => "2026-10-20", timeNow: () => "09:30", ...props }); },
     effects() { return effects.map(effect => effect()).filter(Boolean); },
     runNextTimer() { const [id, callback] = timers.entries().next().value; timers.delete(id); callback(); },
     showKeyboard() { keyboardVisible = true; listeners.get("keyboardDidShow")?.(); },
@@ -51,38 +53,37 @@ function nodes(tree, type) {
   return [...(tree.type === type ? [tree] : []), ...nodes(tree.props?.children, type)];
 }
 
-test("manual entry focuses after presentation, retries, and cancels retries when keyboard opens", () => {
+for (const kind of ["date", "time"]) test(`${kind} field opens the existing native picker and preserves cancellation`, async () => {
   const h = host();
-  const props = { label: "TIME", value: "09:30" };
-  nodes(h.render("ManualDateTimeField", props), "Pressable")[0].props.onPress();
-  const tree = h.render("ManualDateTimeField", props);
-  h.effects();
-  const input = nodes(tree, "Field").find(node => node.props.inputProps.ref).props.inputProps.ref;
-  let focused = false, focusCalls = 0;
-  input.current = { isFocused: () => focused, blur: () => { focused = false; }, focus: () => { focused = true; focusCalls++; } };
-  nodes(tree, "Modal")[0].props.onShow();
-  assert.equal(focusCalls, 0);
-  h.runNextTimer();
-  h.runNextTimer();
-  assert.equal(focusCalls, 2);
-  h.showKeyboard();
-  assert.equal(h.timers.size, 0);
+  h.scope.validDate = value => value === "2099-12-24";
+  let initial, selected;
+  const value = kind === "date" ? "2099-12-24" : "09:30";
+  h.scope.NativeModules.ReminderNative = {
+    [kind === "date" ? "chooseDate" : "chooseTime"]: async next => { initial = next; return value; },
+  };
+  const props = { label: kind, kind, value, onChangeText: next => { selected = next; } };
+  let tree = h.render("VisualPickerField", props);
+  assert.equal(nodes(tree, "Field").length, 0);
+  await nodes(tree, "Pressable")[0].props.onPress();
+  assert.equal(initial, value);
+  assert.equal(selected, value);
+  selected = undefined;
+  h.scope.NativeModules.ReminderNative[kind === "date" ? "chooseDate" : "chooseTime"] = async () => null;
+  tree = h.render("VisualPickerField", props);
+  await nodes(tree, "Pressable")[0].props.onPress();
+  assert.equal(selected, undefined);
 });
 
-test("closing manual entry cancels pending focus and reopening starts a fresh focus request", () => {
+test("repeat opens visual options and optional end date can be cleared", () => {
   const h = host();
-  const props = { label: "DATE", value: "2026-12-24" };
-  nodes(h.render("ManualDateTimeField", props), "Pressable")[0].props.onPress();
-  let tree = h.render("ManualDateTimeField", props);
-  nodes(tree, "Modal")[0].props.onShow();
-  nodes(tree, "Btn")[0].props.onPress();
-  assert.equal(h.timers.size, 0);
-  tree = h.render("ManualDateTimeField", props);
-  assert.equal(nodes(tree, "Field").length, 1);
-  nodes(tree, "Pressable")[0].props.onPress();
-  tree = h.render("ManualDateTimeField", props);
-  nodes(tree, "Modal")[0].props.onShow();
-  assert.equal(h.timers.size, 3);
+  const props = { label: "Repeat", kind: "repeat", value: "daily" };
+  nodes(h.render("VisualPickerField", props), "Pressable")[0].props.onPress();
+  const tree = h.render("VisualPickerField", props);
+  assert.equal(nodes(tree, "ReminderValuePicker")[0].props.visualOnly, true);
+  let selected;
+  const end = h.render("VisualPickerField", { label: "Until date", kind: "date", optional: true, value: "2099-12-24", onChangeText: next => { selected = next; } });
+  nodes(end, "Pressable").find(node => node.props.accessibilityLabel === "Clear repeat end date").props.onPress();
+  assert.equal(selected, "");
 });
 
 for (const editing of [null, { id: "existing" }]) test(`save stays outside scrolling content and reserves its measured height (${editing ? "edit" : "create"})`, () => {
@@ -114,4 +115,20 @@ for (const editing of [null, { id: "existing" }]) test(`sticky save preserves re
   assert.equal(saved.value, form);
   assert.equal(saved.identity, editing);
   assert.equal(closed, true);
+});
+
+for (const editing of [null, { id: "existing" }]) test(`form wires date, time and end date to visual editors (${editing ? "edit" : "create"})`, () => {
+  const h = host();
+  const form = { title: "Test", date: "2099-12-24", time: "09:30", repeat: "yearly", repeatUntil: "2099-12-31" };
+  h.scope.validDate = () => true;
+  const tree = h.render("ReminderDraft", { initial: { editing, form }, todayISO: () => "2026-10-20", timeNow: () => "10:00" });
+  const fields = nodes(tree, h.scope.VisualPickerField);
+  assert.deepEqual(fields.map(node => node.props.kind), ["date", "time", "repeat", "date"]);
+  for (const field of fields) {
+    const next = field.props.kind === "repeat" ? "daily" : field.props.kind === "time" ? "10:45" : "2099-12-30";
+    field.props.onChangeText(next);
+    const updated = h.render("ReminderDraft", { initial: { editing, form }, todayISO: () => "2026-10-20", timeNow: () => "10:00" });
+    const matching = nodes(updated, h.scope.VisualPickerField).find(node => node.props.label === field.props.label);
+    assert.equal(matching.props.value, next);
+  }
 });

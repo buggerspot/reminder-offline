@@ -1,56 +1,43 @@
-import React, { useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import React, { useContext, useRef, useState, useSyncExternalStore } from "react";
 import { Keyboard, KeyboardAvoidingView, NativeModules, Platform, Pressable, Text, View, Modal } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Check, Trash2, X } from "lucide-react-native";
+import { CalendarDays, ChevronRight, Clock, Repeat, Check, Trash2, X } from "lucide-react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Btn, Chip, Field, Label, PaletteContext } from "./components";
 import { PremiumScrollView as ScrollView, ImageViewerScope, ZoomableImage } from "./interaction-components";
 import { importReminderImage } from "./lib/images";
+import { ReminderValuePicker, REPEAT_OPTIONS } from "./reminder-value-picker";
 import { validDate, nextOccurrence } from "./lib/recurrence";
 
-function ManualDateTimeField({ label, ...props }) {
+function VisualPickerField({ label, kind, value, onChangeText, placeholder, fallback, optional, Alert }) {
   const palette = useContext(PaletteContext);
   const [visible, setVisible] = useState(false);
-  const input = useRef(null);
-  const focusTimers = useRef([]);
-  const stopFocus = () => {
-    focusTimers.current.forEach(clearTimeout);
-    focusTimers.current = [];
+  const opening = useRef(false);
+  const Icon = kind === "time" ? Clock : kind === "repeat" ? Repeat : CalendarDays;
+  const open = async () => {
+    if (opening.current) return;
+    Keyboard.dismiss();
+    const choose = kind === "date" ? NativeModules.ReminderNative?.chooseDate : kind === "time" ? NativeModules.ReminderNative?.chooseTime : null;
+    if (!choose) { setVisible(true); return; }
+    opening.current = true;
+    try {
+      const initial = kind === "date" ? (validDate(value) ? value : fallback) : (/^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : fallback);
+      const selected = await choose(initial);
+      if (selected) onChangeText(selected);
+    } catch (error) { Alert.alert(kind === "date" ? "Choose date" : "Choose time", error.message); }
+    finally { opening.current = false; }
   };
-  useEffect(() => {
-    if (!visible) return;
-    const shown = Keyboard.addListener("keyboardDidShow", stopFocus);
-    return () => { shown.remove(); stopFocus(); };
-  }, [visible]);
-  const close = () => { stopFocus(); Keyboard.dismiss(); setVisible(false); };
-  const focusInput = () => {
-    stopFocus();
-    // Native modal presentation and keyboard focus settle separately on Android.
-    // Retry only until the keyboard opens, and cancel when this modal closes.
-    focusTimers.current = [80, 280, 600].map(delay => setTimeout(() => {
-      if (input.current?.isFocused() && Keyboard.isVisible()) return;
-      input.current?.blur();
-      input.current?.focus();
-    }, delay));
-  };
+  const display = kind === "repeat" ? REPEAT_OPTIONS.find(option => option.value === value)?.label : value;
   return <>
-    <Pressable accessibilityRole="button" accessibilityLabel={`Edit ${label}`} onPress={() => setVisible(true)}>
-      <View pointerEvents="none">
-        <Field {...props} inputProps={{ editable: false, accessible: false }} />
-      </View>
+    <Pressable accessibilityRole="button" accessibilityLabel={`${label}, ${display || placeholder}`} accessibilityHint="Opens selection picker" onPress={open}
+      style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: palette.bg, borderWidth: 1, borderColor: palette.border, borderRadius: 13, paddingHorizontal: 13, paddingVertical: 12, minHeight: 48, opacity: pressed ? 0.7 : 1 })}>
+      <Icon size={18} color={palette.brand} />
+      <Text style={{ flex: 1, color: display ? palette.text : palette.muted, fontSize: 14 }}>{display || placeholder}</Text>
+      <ChevronRight size={18} color={palette.muted} />
     </Pressable>
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={close} onShow={focusInput}>
-      {visible && <KeyboardAvoidingView style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.4)" }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-        <SafeAreaView style={{ flex: 1 }}>
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: 20 }}>
-            <View accessibilityViewIsModal style={{ backgroundColor: palette.card, borderColor: palette.border, borderWidth: 1, borderRadius: 20, padding: 20 }}>
-              <Label>{label}</Label>
-              <Field {...props} inputProps={{ ref: input, showSoftInputOnFocus: true, accessibilityLabel: label, returnKeyType: "done", onSubmitEditing: close }} />
-              <View style={{ marginTop: 16 }}><Btn title="Done" onPress={close} /></View>
-            </View>
-          </ScrollView>
-        </SafeAreaView>
-      </KeyboardAvoidingView>}
+    {optional && value ? <Pressable accessibilityRole="button" accessibilityLabel="Clear repeat end date" onPress={() => onChangeText("")} style={{ paddingVertical: 10 }}><Text style={{ color: palette.brand, fontWeight: "700" }}>No end date</Text></Pressable> : null}
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={() => setVisible(false)}>
+      {visible && <ReminderValuePicker visualOnly field={{ kind, label, placeholder, fallback, optional }} value={value} onChange={onChangeText} onClose={() => setVisible(false)} />}
     </Modal>
   </>;
 }
@@ -268,8 +255,9 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                 {(form.repeat === "none" || form.repeat === "yearly") && (
                   <>
                     <Label>DATE · YYYY-MM-DD</Label>
-                    <ManualDateTimeField
+                    <VisualPickerField
                       label="DATE · YYYY-MM-DD"
+                      kind="date" fallback={todayISO()} Alert={Alert}
                       value={form.date}
                       onChangeText={(v) =>
                         setForm((p) => ({
@@ -289,38 +277,6 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                     >
                       Use today or a future date.
                     </Text>
-                    {NativeModules.ReminderNative && (
-                      <Pressable
-                        accessibilityRole="button"
-                        style={{
-                          paddingVertical: 12,
-                        }}
-                        onPress={async () => {
-                          try {
-                            const date =
-                              await NativeModules.ReminderNative.chooseDate(
-                                validDate(form.date) ? form.date : todayISO(),
-                              );
-                            if (date)
-                              setForm((p) => ({
-                                ...p,
-                                date,
-                              }));
-                          } catch (e) {
-                            Alert.alert("Choose date", e.message);
-                          }
-                        }}
-                      >
-                        <Text
-                          style={{
-                            color: palette.brand,
-                            fontWeight: "700",
-                          }}
-                        >
-                          Choose date
-                        </Text>
-                      </Pressable>
-                    )}
                   </>
                 )}
                 {form.repeat === "weekly" && (
@@ -356,8 +312,9 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                 {form.repeat === "monthly" && (
                   <>
                     <Label>DAY OF MONTH · 1–31</Label>
-                    <ManualDateTimeField
+                    <VisualPickerField
                       label="DAY OF MONTH · 1–31"
+                      kind="monthDay"
                       value={String(form.monthDay || "")}
                       onChangeText={(v) =>
                         setForm((p) => ({
@@ -379,9 +336,10 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                   </>
                 )}
                 <Label>TIME · 24-HOUR HH:MM</Label>
-                <ManualDateTimeField
+                <VisualPickerField
                   label="TIME · 24-HOUR HH:MM"
-                  value={form.time}
+                  kind="time" fallback={timeNow()} Alert={Alert}
+                      value={form.time}
                   onChangeText={(v) =>
                     setForm((p) => ({
                       ...p,
@@ -391,94 +349,18 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                   placeholder="09:30"
                   keyboardType="numbers-and-punctuation"
                 />
-                {NativeModules.ReminderNative && (
-                  <Pressable
-                    accessibilityRole="button"
-                    style={{
-                      paddingVertical: 12,
-                    }}
-                    onPress={async () => {
-                      try {
-                        const time =
-                          await NativeModules.ReminderNative.chooseTime(
-                            /^([01]\d|2[0-3]):[0-5]\d$/.test(form.time)
-                              ? form.time
-                              : timeNow(),
-                          );
-                        if (time)
-                          setForm((p) => ({
-                            ...p,
-                            time,
-                          }));
-                      } catch (e) {
-                        Alert.alert("Choose time", e.message);
-                      }
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: palette.brand,
-                        fontWeight: "700",
-                      }}
-                    >
-                      Choose time
-                    </Text>
-                  </Pressable>
-                )}
                 <Label>REPEAT</Label>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    flexWrap: "wrap",
-                    gap: 8,
-                  }}
-                >
-                  {[
-                    {
-                      v: "none",
-                      l: "Never",
-                    },
-                    {
-                      v: "daily",
-                      l: "Daily",
-                    },
-                    {
-                      v: "weekly",
-                      l: "Weekly",
-                    },
-                    {
-                      v: "monthly",
-                      l: "Monthly",
-                    },
-                    {
-                      v: "yearly",
-                      l: "Yearly",
-                    },
-                  ].map((o) => (
-                    <Chip
-                      key={o.v}
-                      label={o.l}
-                      active={form.repeat === o.v}
-                      onPress={() =>
-                        setForm((p) => ({
-                          ...p,
-                          repeat: o.v,
-                          weekdays: p.weekdays || [
-                            new Date(`${p.date}T12:00:00`).getDay(),
-                          ],
-                          monthDay:
-                            p.monthDay ||
-                            new Date(`${p.date}T12:00:00`).getDate(),
-                        }))
-                      }
-                    />
-                  ))}
-                </View>
+                <VisualPickerField label="Repeat" kind="repeat" value={form.repeat}
+                  onChangeText={repeat => setForm(p => ({ ...p, repeat,
+                    weekdays: p.weekdays || [new Date(`${p.date}T12:00:00`).getDay()],
+                    monthDay: p.monthDay || new Date(`${p.date}T12:00:00`).getDate(),
+                  }))} />
                 {form.repeat !== "none" && (
                   <>
                     <Label>REPEAT UNTIL (OPTIONAL) · YYYY-MM-DD</Label>
-                    <ManualDateTimeField
+                    <VisualPickerField
                       label="REPEAT UNTIL (OPTIONAL) · YYYY-MM-DD"
+                      kind="date" optional fallback={validDate(form.date) ? form.date : todayISO()} Alert={Alert}
                       value={form.repeatUntil}
                       onChangeText={(v) =>
                         setForm((p) => ({
