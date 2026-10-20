@@ -1,4 +1,4 @@
-import React, { useContext, useRef, useState, useSyncExternalStore } from "react";
+import React, { useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Keyboard, KeyboardAvoidingView, NativeModules, Platform, Pressable, Text, View, Modal } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Check, Trash2, X } from "lucide-react-native";
@@ -12,24 +12,40 @@ function ManualDateTimeField({ label, ...props }) {
   const palette = useContext(PaletteContext);
   const [visible, setVisible] = useState(false);
   const input = useRef(null);
-  const close = () => { Keyboard.dismiss(); setVisible(false); };
+  const focusTimers = useRef([]);
+  const stopFocus = () => {
+    focusTimers.current.forEach(clearTimeout);
+    focusTimers.current = [];
+  };
+  useEffect(() => {
+    if (!visible) return;
+    const shown = Keyboard.addListener("keyboardDidShow", stopFocus);
+    return () => { shown.remove(); stopFocus(); };
+  }, [visible]);
+  const close = () => { stopFocus(); Keyboard.dismiss(); setVisible(false); };
+  const focusInput = () => {
+    stopFocus();
+    // Native modal presentation and keyboard focus settle separately on Android.
+    // Retry only until the keyboard opens, and cancel when this modal closes.
+    focusTimers.current = [80, 280, 600].map(delay => setTimeout(() => {
+      if (input.current?.isFocused() && Keyboard.isVisible()) return;
+      input.current?.blur();
+      input.current?.focus();
+    }, delay));
+  };
   return <>
     <Pressable accessibilityRole="button" accessibilityLabel={`Edit ${label}`} onPress={() => setVisible(true)}>
       <View pointerEvents="none">
         <Field {...props} inputProps={{ editable: false, accessible: false }} />
       </View>
     </Pressable>
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={close} onShow={() => {
-      // Focus again once the native modal window can receive keyboard input.
-      input.current?.blur();
-      requestAnimationFrame(() => input.current?.focus());
-    }}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={close} onShow={focusInput}>
       {visible && <KeyboardAvoidingView style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.4)" }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <SafeAreaView style={{ flex: 1 }}>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: 20 }}>
             <View accessibilityViewIsModal style={{ backgroundColor: palette.card, borderColor: palette.border, borderWidth: 1, borderRadius: 20, padding: 20 }}>
               <Label>{label}</Label>
-              <Field {...props} inputProps={{ ref: input, autoFocus: true, showSoftInputOnFocus: true, accessibilityLabel: label, returnKeyType: "done", onSubmitEditing: close }} />
+              <Field {...props} inputProps={{ ref: input, showSoftInputOnFocus: true, accessibilityLabel: label, returnKeyType: "done", onSubmitEditing: close }} />
               <View style={{ marginTop: 16 }}><Btn title="Done" onPress={close} /></View>
             </View>
           </ScrollView>
@@ -44,6 +60,7 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
   const [form, setForm] = useState(initial.form);
   const editing = initial.editing;
   const [busy, setBusy] = useState(false);
+  const [saveBarHeight, setSaveBarHeight] = useState(88);
   const saving = useRef(false);
   const submitReminder = async () => {
     if (saving.current) return;
@@ -127,13 +144,14 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
               style={{
                 flex: 1,
               }}
-              behavior={Platform.OS === "ios" ? "padding" : undefined}
+              behavior={Platform.OS === "ios" ? "padding" : "height"}
             >
               <ScrollView
                 keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
                 contentContainerStyle={{
                   padding: 20,
-                  paddingBottom: 40,
+                  paddingBottom: saveBarHeight + 20,
                 }}
               >
                 <View
@@ -145,6 +163,8 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                   }}
                 >
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Close reminder editor"
                     onPress={onClose}
                     style={{
                       width: 42,
@@ -162,6 +182,8 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                       color: palette.text,
                       fontSize: 20,
                       fontWeight: "800",
+                      flex: 1,
+                      textAlign: "center",
                     }}
                   >
                     {editing ? "Edit reminder" : "New reminder"}
@@ -190,11 +212,13 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                     }))
                   }
                   placeholder="e.g. Mom's birthday"
+                  inputProps={{ accessibilityLabel: "Reminder title", returnKeyType: "done" }}
                 />
                 <Label>IMAGE (OPTIONAL)</Label>
                 <View
                   style={{
                     flexDirection: "row",
+                    flexWrap: "wrap",
                     alignItems: "center",
                     gap: 10,
                   }}
@@ -239,6 +263,7 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                   }
                   placeholder="Add a note or a little context…"
                   multiline
+                  inputProps={{ accessibilityLabel: "Description" }}
                 />
                 {(form.repeat === "none" || form.repeat === "yearly") && (
                   <>
@@ -331,7 +356,8 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                 {form.repeat === "monthly" && (
                   <>
                     <Label>DAY OF MONTH · 1–31</Label>
-                    <Field
+                    <ManualDateTimeField
+                      label="DAY OF MONTH · 1–31"
                       value={String(form.monthDay || "")}
                       onChangeText={(v) =>
                         setForm((p) => ({
@@ -461,12 +487,22 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                         }))
                       }
                       placeholder="Leave empty to repeat indefinitely"
+                      keyboardType="numbers-and-punctuation"
                     />
                   </>
                 )}
+              </ScrollView>
                 <View
+                  onLayout={event => setSaveBarHeight(event.nativeEvent.layout.height)}
                   style={{
-                    marginTop: 26,
+                    position: "absolute",
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    paddingHorizontal: 20,
+                    paddingTop: 12,
+                    paddingBottom: 20,
+                    backgroundColor: palette.bg,
                   }}
                 >
                   <Btn
@@ -482,7 +518,6 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                     icon={<Check color="white" size={18} />}
                   />
                 </View>
-              </ScrollView>
             </KeyboardAvoidingView>
           </SafeAreaView>
   );
