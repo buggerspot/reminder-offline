@@ -279,6 +279,26 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                     </Text>
                   </>
                 )}
+                <Label>TIME · 24-HOUR HH:MM</Label>
+                <VisualPickerField
+                  label="TIME · 24-HOUR HH:MM"
+                  kind="time" fallback={timeNow()} Alert={Alert}
+                      value={form.time}
+                  onChangeText={(v) =>
+                    setForm((p) => ({
+                      ...p,
+                      time: v,
+                    }))
+                  }
+                  placeholder="09:30"
+                  keyboardType="numbers-and-punctuation"
+                />
+                <Label>REPEAT</Label>
+                <VisualPickerField label="Repeat" kind="repeat" value={form.repeat}
+                  onChangeText={repeat => setForm(p => ({ ...p, repeat,
+                    weekdays: p.weekdays || [new Date(`${p.date}T12:00:00`).getDay()],
+                    monthDay: p.monthDay || new Date(`${p.date}T12:00:00`).getDate(),
+                  }))} />
                 {form.repeat === "weekly" && (
                   <>
                     <Label>WEEKDAYS</Label>
@@ -335,26 +355,6 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                     </Text>
                   </>
                 )}
-                <Label>TIME · 24-HOUR HH:MM</Label>
-                <VisualPickerField
-                  label="TIME · 24-HOUR HH:MM"
-                  kind="time" fallback={timeNow()} Alert={Alert}
-                      value={form.time}
-                  onChangeText={(v) =>
-                    setForm((p) => ({
-                      ...p,
-                      time: v,
-                    }))
-                  }
-                  placeholder="09:30"
-                  keyboardType="numbers-and-punctuation"
-                />
-                <Label>REPEAT</Label>
-                <VisualPickerField label="Repeat" kind="repeat" value={form.repeat}
-                  onChangeText={repeat => setForm(p => ({ ...p, repeat,
-                    weekdays: p.weekdays || [new Date(`${p.date}T12:00:00`).getDay()],
-                    monthDay: p.monthDay || new Date(`${p.date}T12:00:00`).getDate(),
-                  }))} />
                 {form.repeat !== "none" && (
                   <>
                     <Label>REPEAT UNTIL (OPTIONAL) · YYYY-MM-DD</Label>
