@@ -345,6 +345,7 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                       keyboardType="number-pad"
                       placeholder="20"
                     />
+                    {Number(form.monthDay) >= 29 && Number(form.monthDay) <= 31 && (
                     <Text
                       style={{
                         color: palette.muted,
@@ -353,6 +354,7 @@ function ReminderDraft({ initial, onClose, onSave, Alert, todayISO, timeNow }) {
                     >
                       Months without this day are skipped.
                     </Text>
+                    )}
                   </>
                 )}
                 {form.repeat !== "none" && (
