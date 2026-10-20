@@ -80,10 +80,13 @@ export async function saveReminders(reminders) {
 export async function loadSettings() {
   try {
     const value = await AsyncStorage.getItem(SETTINGS_KEY);
+    const saved = value ? JSON.parse(value) : {};
     return {
       ...DEFAULT_SETTINGS,
-      ...(value ? JSON.parse(value) : {}),
-      theme: value && JSON.parse(value).theme === "dark" ? "dark" : "light",
+      ...saved,
+      defaultSoundId: saved.defaultSoundId == null || ["gentle", "bright"].includes(saved.defaultSoundId)
+        ? DEFAULT_SETTINGS.defaultSoundId : saved.defaultSoundId,
+      theme: saved.theme === "dark" ? "dark" : "light",
       soundEnabled: true,
       keepReminderAfterDismiss: true,
       confirmBeforeClear: false,

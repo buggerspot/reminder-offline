@@ -14,23 +14,27 @@ function ManualDateTimeField({ label, ...props }) {
   const input = useRef(null);
   const close = () => { Keyboard.dismiss(); setVisible(false); };
   return <>
-    <Pressable accessibilityRole="button" accessibilityLabel={`Edit ${label}`} onPress={() => { Keyboard.dismiss(); setVisible(true); }}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Edit ${label}`} onPress={() => setVisible(true)}>
       <View pointerEvents="none">
         <Field {...props} inputProps={{ editable: false, accessible: false }} />
       </View>
     </Pressable>
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={close} onShow={() => input.current?.focus()}>
-      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.4)" }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={close} onShow={() => {
+      // Focus again once the native modal window can receive keyboard input.
+      input.current?.blur();
+      requestAnimationFrame(() => input.current?.focus());
+    }}>
+      {visible && <KeyboardAvoidingView style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.4)" }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <SafeAreaView style={{ flex: 1 }}>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: 20 }}>
             <View accessibilityViewIsModal style={{ backgroundColor: palette.card, borderColor: palette.border, borderWidth: 1, borderRadius: 20, padding: 20 }}>
               <Label>{label}</Label>
-              <Field {...props} inputProps={{ ref: input, accessibilityLabel: label, returnKeyType: "done", onSubmitEditing: close }} />
+              <Field {...props} inputProps={{ ref: input, autoFocus: true, showSoftInputOnFocus: true, accessibilityLabel: label, returnKeyType: "done", onSubmitEditing: close }} />
               <View style={{ marginTop: 16 }}><Btn title="Done" onPress={close} /></View>
             </View>
           </ScrollView>
         </SafeAreaView>
-      </KeyboardAvoidingView>
+      </KeyboardAvoidingView>}
     </Modal>
   </>;
 }

@@ -217,7 +217,7 @@ export const ReminderSounds = React.memo(function ReminderSounds({ visible, onCl
                           onPress={() =>
                             Alert.alert(
                               "Remove sound?",
-                              "1 imported sound will be deleted. If selected, all reminders will use Reminder.",
+                              "1 imported sound will be deleted. If selected, all reminders will use Happy Bells.",
                               [
                                 {
                                   text: "Cancel",
@@ -231,7 +231,7 @@ export const ReminderSounds = React.memo(function ReminderSounds({ visible, onCl
                                       stopPreview();
                                       if (settings.defaultSoundId === item.id)
                                         await updateSettings({
-                                          defaultSoundId: null,
+                                          defaultSoundId: "happy_bells",
                                         });
                                       await removeSound(item);
                                       setSounds(await loadSounds());

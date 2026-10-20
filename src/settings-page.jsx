@@ -76,7 +76,7 @@ export const SettingsPage = React.memo(function SettingsPage({ Alert, alarmStatu
                       BUILT_IN_SOUNDS.find(
                         (s) => s.id === (settings.defaultSoundId || null),
                       )
-                    )?.name || "Reminder"
+                    )?.name || "Happy Bells"
                   }
                   onPress={() => setShowSounds(true)}
                   right={<ChevronRight color={palette.muted} />}
